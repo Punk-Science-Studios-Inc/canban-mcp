@@ -208,3 +208,7 @@ npm run build    # rebuilds dist/canban-mcp.mjs, which is committed
 `src/domain/` is copied from the Canban web app, which owns the data model. After changing it
 there, run `npm run sync-domain` (it expects `../canban`), then test, build and commit `dist/`.
 CI fails if the committed bundle doesn't match the source.
+
+## Licence
+
+MIT. See [LICENSE](LICENSE).

@@ -32,5 +32,6 @@
     "type": "git",
     "url": "https://github.com/Punk-Science-Studios-Inc/canban-mcp.git"
   },
-  "homepage": "https://punkscience.ca/canban/"
+  "homepage": "https://punkscience.ca/canban/",
+  "license": "MIT"
 }
