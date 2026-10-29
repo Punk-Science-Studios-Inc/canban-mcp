@@ -21,13 +21,13 @@ let board: Board
 let client: Client
 let projectId = ''
 let hiddenId = ''
+let seedClock = Math.floor(Date.now() / 1000) - 100
 
 async function seed(writes: commands.Write[]): Promise<void> {
   const pool = new SimplePool()
   pool.automaticallyAuth = () => async (e) => finalizeEvent(e, ownerKey)
-  let at = Math.floor(Date.now() / 1000) - 100
   for (const { address, content } of writes) {
-    const event = finalizeEvent(template(address, content as never, at++), ownerKey)
+    const event = finalizeEvent(template(address, content as never, seedClock++), ownerKey)
     await Promise.any(pool.publish([relay.url], event, { onauth: async (e) => finalizeEvent(e, ownerKey) }))
   }
   pool.destroy()
@@ -116,6 +116,22 @@ describe('canban-mcp', () => {
     const result = await call('move_task', { task: 'nope', lane: 'Done' })
     expect(result.isError).toBe(true)
     expect(result.text).toMatch(/No task matches "nope"/)
+  })
+})
+
+describe('canban-mcp when access changes', () => {
+  it('picks up a project\'s existing tasks once the agent is put on it', async () => {
+    const company = [...(await import('../src/domain/resolve')).resolve(relay.events).values()][0]
+    const hidden = company.projects.find((p) => p.id === hiddenId)!
+    const lane = company.lanes.find((l) => l.projectId === hiddenId)!
+    await seed(commands.createTask(company.company.id, hiddenId, lane.id, 'Already here').writes)
+    expect((await call('get_board', { project: hiddenId })).isError).toBe(true)
+
+    await seed(commands.updateProject(hidden, { members: [owner, agent.pubkey] }))
+    await new Promise((r) => setTimeout(r, 1500))
+
+    const view = (await call('get_board', { project: 'Secret plans' })).json()
+    expect(view.lanes[0].tasks.map((t: { title: string }) => t.title)).toEqual(['Already here'])
   })
 })
 

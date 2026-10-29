@@ -1,7 +1,7 @@
 import { SimplePool, type NostrEvent } from 'nostr-tools'
-import { finalizeEvent } from 'nostr-tools/pure'
+import { finalizeEvent, getPublicKey } from 'nostr-tools/pure'
 import { dOf, template } from './domain/entities'
-import { APP_TAG, KIND, type CompanyState } from './domain/model'
+import { APP_TAG, KIND, visibilityKey, type CompanyState } from './domain/model'
 import { resolve } from './domain/resolve'
 import type { Write } from './domain/commands'
 
@@ -9,6 +9,7 @@ export type Connection = 'connecting' | 'live' | 'denied' | 'offline'
 
 const READY_TIMEOUT = 10_000
 const RETRY_MS = 3_000
+const RESUBSCRIBE_MS = 400
 export const PROFILE_RELAYS = ['wss://purplepag.es', 'wss://relay.primal.net', 'wss://relay.damus.io', 'wss://nos.lol']
 
 export class Board {
@@ -22,12 +23,16 @@ export class Board {
   private waiters: (() => void)[] = []
   private sub?: { close: () => void }
   private closed = false
+  private me: string
+  private visible = ''
+  private recheck?: ReturnType<typeof setTimeout>
 
   constructor(
     private relay: string,
     private secret: Uint8Array,
     private profileRelays: string[] = PROFILE_RELAYS,
   ) {
+    this.me = getPublicKey(secret)
     this.pool.automaticallyAuth = () => (event) => Promise.resolve(finalizeEvent(event, this.secret))
   }
 
@@ -37,11 +42,12 @@ export class Board {
       onevent: (event) => this.add(event),
       oneose: () => {
         this.connection = 'live'
+        this.visible = visibilityKey(this.companies(), this.me)
         this.markLoaded()
       },
       onclose: (reasons) => {
-        if (this.closed) return
         const reason = reasons.map((r) => r.reason).join('; ')
+        if (this.closed || reason.includes('closed by caller')) return
         this.lastError = reason
         this.connection = /restricted|auth-required/i.test(reason) ? 'denied' : 'offline'
         this.markLoaded()
@@ -52,6 +58,7 @@ export class Board {
 
   stop(): void {
     this.closed = true
+    clearTimeout(this.recheck)
     this.sub?.close()
     this.pool.destroy()
   }
@@ -101,6 +108,20 @@ export class Board {
     this.events.set(event.id, event)
     const d = event.tags.find((t) => t[0] === 'd')?.[1]
     if (d) this.newestByD.set(d, Math.max(this.newestByD.get(d) ?? 0, event.created_at))
+    if (this.loaded) this.scheduleRecheck()
+  }
+
+  // The relay only serves what this agent may see, so gaining a company or project means
+  // asking again for what it already holds.
+  private scheduleRecheck(): void {
+    clearTimeout(this.recheck)
+    this.recheck = setTimeout(() => {
+      const key = visibilityKey(this.companies(), this.me)
+      if (key === this.visible || this.closed) return
+      this.visible = key
+      this.sub?.close()
+      this.start()
+    }, RESUBSCRIBE_MS)
   }
 
   private markLoaded(): void {

@@ -1,11 +1,27 @@
 import { WebSocketServer, type WebSocket } from 'ws'
 import { matchFilter, verifyEvent, type Filter, type NostrEvent } from 'nostr-tools'
+import { parseD } from '../src/domain/entities'
+import { canSee } from '../src/domain/model'
+import { resolve } from '../src/domain/resolve'
 
 export interface TestRelay {
   url: string
   events: NostrEvent[]
   allow: Set<string>
   close: () => Promise<void>
+}
+
+// The same rule as ps-relay's canban.go: a company's events go to its members, a project's to
+// its admins and assigned members, and authors always see their own.
+function visible(viewer: string, event: NostrEvent, events: NostrEvent[]): boolean {
+  const d = event.tags.find((t) => t[0] === 'd')?.[1] ?? ''
+  if (event.kind !== 30078 || !d.startsWith('canban:') || event.pubkey === viewer) return true
+  const address = parseD(d)
+  const state = address && resolve(events).get(address.companyId)
+  if (!address || !state || !state.members.some((m) => m.pubkey === viewer)) return false
+  if (address.type === 'company' || address.type === 'member') return true
+  const project = state.projects.find((p) => p.id === address.projectId)
+  return project ? canSee(state, project, viewer) : state.members.some((m) => m.pubkey === viewer && m.role !== 'member')
 }
 
 export async function startRelay(): Promise<TestRelay> {
@@ -40,7 +56,8 @@ export async function startRelay(): Promise<TestRelay> {
         const refused = member()
         if (refused) return ws.send(JSON.stringify(['CLOSED', id, refused]))
         subs.get(ws)!.set(id, filters)
-        for (const e of events) if (filters.some((f) => matchFilter(f, e))) ws.send(JSON.stringify(['EVENT', id, e]))
+        const viewer = authed.get(ws)!
+        for (const e of events) if (filters.some((f) => matchFilter(f, e)) && visible(viewer, e, events)) ws.send(JSON.stringify(['EVENT', id, e]))
         ws.send(JSON.stringify(['EOSE', id]))
       } else if (type === 'CLOSE') {
         subs.get(ws)!.delete(rest[0])
@@ -51,6 +68,8 @@ export async function startRelay(): Promise<TestRelay> {
         events.push(event)
         ws.send(JSON.stringify(['OK', event.id, true, '']))
         for (const [peer, peerSubs] of subs) {
+          const viewer = authed.get(peer)
+          if (!viewer || !visible(viewer, event, events)) continue
           for (const [id, filters] of peerSubs) if (filters.some((f) => matchFilter(f, event))) peer.send(JSON.stringify(['EVENT', id, event]))
         }
       }

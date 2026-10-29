@@ -65,3 +65,12 @@ export function isAdmin(state: CompanyState, pubkey: string): boolean {
 export function canSee(state: CompanyState, project: Project, pubkey: string): boolean {
   return isAdmin(state, pubkey) || project.members.includes(pubkey)
 }
+
+export function visibilityKey(companies: Map<string, CompanyState>, pubkey: string): string {
+  const parts: string[] = []
+  for (const state of companies.values()) {
+    if (!state.members.some((m) => m.pubkey === pubkey)) continue
+    parts.push(state.company.id, ...state.projects.filter((p) => canSee(state, p, pubkey)).map((p) => p.id))
+  }
+  return parts.sort().join(',')
+}

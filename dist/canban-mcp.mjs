@@ -44271,6 +44271,14 @@ function isAdmin(state, pubkey) {
 function canSee(state, project, pubkey) {
   return isAdmin(state, pubkey) || project.members.includes(pubkey);
 }
+function visibilityKey(companies, pubkey) {
+  const parts = [];
+  for (const state of companies.values()) {
+    if (!state.members.some((m) => m.pubkey === pubkey)) continue;
+    parts.push(state.company.id, ...state.projects.filter((p) => canSee(state, p, pubkey)).map((p) => p.id));
+  }
+  return parts.sort().join(",");
+}
 
 // src/domain/entities.ts
 function dOf(address) {
@@ -44455,12 +44463,14 @@ function byOrder(a, b) {
 // src/board.ts
 var READY_TIMEOUT = 1e4;
 var RETRY_MS = 3e3;
+var RESUBSCRIBE_MS = 400;
 var PROFILE_RELAYS = ["wss://purplepag.es", "wss://relay.primal.net", "wss://relay.damus.io", "wss://nos.lol"];
 var Board = class {
   constructor(relay, secret, profileRelays = PROFILE_RELAYS) {
     this.relay = relay;
     this.secret = secret;
     this.profileRelays = profileRelays;
+    this.me = getPublicKey2(secret);
     this.pool.automaticallyAuth = () => (event) => Promise.resolve(finalizeEvent2(event, this.secret));
   }
   relay;
@@ -44476,17 +44486,21 @@ var Board = class {
   waiters = [];
   sub;
   closed = false;
+  me;
+  visible = "";
+  recheck;
   start() {
     this.sub = this.pool.subscribe([this.relay], { kinds: [KIND], "#t": [APP_TAG] }, {
       onauth: async (event) => finalizeEvent2(event, this.secret),
       onevent: (event) => this.add(event),
       oneose: () => {
         this.connection = "live";
+        this.visible = visibilityKey(this.companies(), this.me);
         this.markLoaded();
       },
       onclose: (reasons) => {
-        if (this.closed) return;
         const reason = reasons.map((r) => r.reason).join("; ");
+        if (this.closed || reason.includes("closed by caller")) return;
         this.lastError = reason;
         this.connection = /restricted|auth-required/i.test(reason) ? "denied" : "offline";
         this.markLoaded();
@@ -44496,6 +44510,7 @@ var Board = class {
   }
   stop() {
     this.closed = true;
+    clearTimeout(this.recheck);
     this.sub?.close();
     this.pool.destroy();
   }
@@ -44540,6 +44555,19 @@ var Board = class {
     this.events.set(event.id, event);
     const d = event.tags.find((t) => t[0] === "d")?.[1];
     if (d) this.newestByD.set(d, Math.max(this.newestByD.get(d) ?? 0, event.created_at));
+    if (this.loaded) this.scheduleRecheck();
+  }
+  // The relay only serves what this agent may see, so gaining a company or project means
+  // asking again for what it already holds.
+  scheduleRecheck() {
+    clearTimeout(this.recheck);
+    this.recheck = setTimeout(() => {
+      const key = visibilityKey(this.companies(), this.me);
+      if (key === this.visible || this.closed) return;
+      this.visible = key;
+      this.sub?.close();
+      this.start();
+    }, RESUBSCRIBE_MS);
   }
   markLoaded() {
     if (this.loaded) return;
