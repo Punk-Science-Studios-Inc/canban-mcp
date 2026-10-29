@@ -3,6 +3,8 @@
 set -e
 SRC="${1:-../canban/src/domain}"
 for f in model entities resolve order commands; do cp "$SRC/$f.ts" "src/domain/$f.ts"; done
-cp "$SRC/resolve.test.ts" test/resolve.test.ts
-sed -i.bak "s#from './entities'#from '../src/domain/entities'#; s#from './resolve'#from '../src/domain/resolve'#" test/resolve.test.ts && rm test/resolve.test.ts.bak
+for t in resolve numbering; do
+  cp "$SRC/$t.test.ts" "test/$t.test.ts"
+  sed -i.bak "s#from './\([a-z]*\)'#from '../src/domain/\1'#" "test/$t.test.ts" && rm "test/$t.test.ts.bak"
+done
 echo "src/domain synced from $SRC"

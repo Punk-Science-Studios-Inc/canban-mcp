@@ -44380,6 +44380,14 @@ function latest(versions, allowed) {
   }
   return best;
 }
+function earliest(versions, allowed) {
+  let first;
+  for (const event of versions) {
+    if (!allowed(event.pubkey)) continue;
+    if (!first || event.created_at < first.created_at || event.created_at === first.created_at && event.id < first.id) first = event;
+  }
+  return first;
+}
 function content(event) {
   if (!event) return void 0;
   try {
@@ -44407,7 +44415,8 @@ function resolveCompany(companyId, ce) {
     const p = content(latest(versions, (pk) => admins.has(pk)));
     if (!p || p.removed) continue;
     const assigned = (p.members ?? []).filter((pk) => memberSet.has(pk));
-    projects.push({ id: projectId, companyId, name: p.name, members: assigned });
+    const project = { id: projectId, companyId, name: p.name, members: assigned, nextNumber: 0 };
+    projects.push(project);
     const writers = /* @__PURE__ */ new Set([...admins, ...assigned]);
     const allowed = (pk) => writers.has(pk);
     const projectLanes = [];
@@ -44418,10 +44427,13 @@ function resolveCompany(companyId, ce) {
     projectLanes.sort(byOrder);
     lanes.push(...projectLanes);
     const laneIds = new Set(projectLanes.map((l) => l.id));
+    let highest = -1;
     for (const [taskId, tv] of ce.tasks.get(projectId) ?? []) {
       const event = latest(tv, allowed);
       const t = content(event);
+      if (event && t && Number.isInteger(t.number)) highest = Math.max(highest, t.number);
       if (!event || !t || t.removed || projectLanes.length === 0) continue;
+      const first = earliest(tv, allowed);
       tasks.push({
         id: taskId,
         projectId,
@@ -44431,10 +44443,14 @@ function resolveCompany(companyId, ce) {
         order: t.order,
         assignee: t.assignee && memberSet.has(t.assignee) ? t.assignee : void 0,
         labels: t.labels ?? [],
+        number: Number.isInteger(t.number) ? t.number : void 0,
+        createdBy: first.pubkey,
+        createdAt: first.created_at,
         updatedBy: event.pubkey,
         updatedAt: event.created_at
       });
     }
+    project.nextNumber = highest + 1;
   }
   projects.sort((a, b) => a.name.localeCompare(b.name));
   tasks.sort(byOrder);
@@ -44458,6 +44474,75 @@ function resolveRoles(owner, versions) {
 }
 function byOrder(a, b) {
   return a.order - b.order || a.id.localeCompare(b.id);
+}
+
+// src/domain/order.ts
+var STEP = 1024;
+function between(before, after) {
+  if (before === void 0 && after === void 0) return STEP;
+  if (before === void 0) return after - STEP;
+  if (after === void 0) return before + STEP;
+  return (before + after) / 2;
+}
+
+// src/domain/commands.ts
+function write(address, content2) {
+  return { address, content: content2 };
+}
+function createLane(companyId, projectId, name, after) {
+  return [write({ type: "lane", companyId, projectId, laneId: newId() }, { name, order: between(after?.order, void 0) })];
+}
+function updateLane(companyId, lane, patch) {
+  return [write({ type: "lane", companyId, projectId: lane.projectId, laneId: lane.id }, { name: lane.name, order: lane.order, ...patch })];
+}
+function createTask(project, lane, title, last, extra = {}) {
+  const taskId = newId();
+  const number4 = project.nextNumber;
+  return {
+    taskId,
+    number: number4,
+    writes: [
+      write(
+        { type: "task", companyId: project.companyId, projectId: project.id, taskId },
+        { lane, title, body: extra.body ?? "", order: between(last?.order, void 0), labels: extra.labels ?? [], assignee: extra.assignee, number: number4 }
+      )
+    ]
+  };
+}
+function updateTask(companyId, task, patch) {
+  const { lane, title, body, order, assignee, labels, number: number4 } = task;
+  return [write({ type: "task", companyId, projectId: task.projectId, taskId: task.id }, { lane, title, body, order, assignee, labels, number: number4, ...patch })];
+}
+function renumberings(state, me2) {
+  const writes = [];
+  for (const project of state.projects) {
+    const byNumber = /* @__PURE__ */ new Map();
+    for (const t of tasksOf(state, project.id)) {
+      if (t.number === void 0) continue;
+      byNumber.set(t.number, [...byNumber.get(t.number) ?? [], t]);
+    }
+    let next = project.nextNumber;
+    for (const group2 of byNumber.values()) {
+      if (group2.length < 2) continue;
+      group2.sort((a, b) => a.createdAt - b.createdAt || a.id.localeCompare(b.id));
+      for (const loser of group2.slice(1)) {
+        if (loser.createdBy === me2) writes.push(...updateTask(state.company.id, loser, { number: next++ }));
+      }
+    }
+  }
+  return writes;
+}
+function lanesOf(state, projectId) {
+  return state.lanes.filter((l) => l.projectId === projectId);
+}
+function tasksOf(state, projectId) {
+  return state.tasks.filter((t) => t.projectId === projectId);
+}
+function tasksInLane(state, laneId) {
+  return state.tasks.filter((t) => t.lane === laneId);
+}
+function canWrite(state, project, pubkey) {
+  return state.members.some((m) => m.pubkey === pubkey && m.role !== "member") || project.members.includes(pubkey);
 }
 
 // src/board.ts
@@ -44562,12 +44647,27 @@ var Board = class {
   scheduleRecheck() {
     clearTimeout(this.recheck);
     this.recheck = setTimeout(() => {
+      void this.healNumbers();
       const key = visibilityKey(this.companies(), this.me);
       if (key === this.visible || this.closed) return;
       this.visible = key;
       this.sub?.close();
       this.start();
     }, RESUBSCRIBE_MS);
+  }
+  healing = false;
+  async healNumbers() {
+    if (this.healing || this.connection !== "live") return;
+    const writes = [...this.companies().values()].flatMap((state) => renumberings(state, this.me));
+    if (!writes.length) return;
+    this.healing = true;
+    try {
+      await this.apply(writes);
+    } catch {
+      return;
+    } finally {
+      this.healing = false;
+    }
   }
   markLoaded() {
     if (this.loaded) return;
@@ -44602,51 +44702,6 @@ function loadIdentity(env = process.env) {
 function describe3(secret, keyFile, created) {
   const pubkey = getPublicKey2(secret);
   return { secret, pubkey, npub: nip19_exports.npubEncode(pubkey), keyFile, created };
-}
-
-// src/domain/order.ts
-var STEP = 1024;
-function between(before, after) {
-  if (before === void 0 && after === void 0) return STEP;
-  if (before === void 0) return after - STEP;
-  if (after === void 0) return before + STEP;
-  return (before + after) / 2;
-}
-
-// src/domain/commands.ts
-function write(address, content2) {
-  return { address, content: content2 };
-}
-function createLane(companyId, projectId, name, after) {
-  return [write({ type: "lane", companyId, projectId, laneId: newId() }, { name, order: between(after?.order, void 0) })];
-}
-function updateLane(companyId, lane, patch) {
-  return [write({ type: "lane", companyId, projectId: lane.projectId, laneId: lane.id }, { name: lane.name, order: lane.order, ...patch })];
-}
-function createTask(companyId, projectId, lane, title, last, extra = {}) {
-  const taskId = newId();
-  return {
-    taskId,
-    writes: [
-      write(
-        { type: "task", companyId, projectId, taskId },
-        { lane, title, body: extra.body ?? "", order: between(last?.order, void 0), labels: extra.labels ?? [], assignee: extra.assignee }
-      )
-    ]
-  };
-}
-function updateTask(companyId, task, patch) {
-  const { lane, title, body, order, assignee, labels } = task;
-  return [write({ type: "task", companyId, projectId: task.projectId, taskId: task.id }, { lane, title, body, order, assignee, labels, ...patch })];
-}
-function lanesOf(state, projectId) {
-  return state.lanes.filter((l) => l.projectId === projectId);
-}
-function tasksInLane(state, laneId) {
-  return state.tasks.filter((t) => t.lane === laneId);
-}
-function canWrite(state, project, pubkey) {
-  return state.members.some((m) => m.pubkey === pubkey && m.role !== "member") || project.members.includes(pubkey);
 }
 
 // src/lookup.ts
@@ -44692,6 +44747,15 @@ function findLane(state, project, ref) {
 function findTask(companies, me2, ref) {
   const visible = new Set(visibleProjects(companies, me2).map((s) => s.item.id));
   const all = companies.flatMap((state) => state.tasks.filter((t) => visible.has(t.projectId)).map((item) => ({ state, item })));
+  const numbered = /^#?(\d+)$/.exec(ref.trim());
+  if (numbered) {
+    const matches = all.filter((s) => s.item.number === Number(numbered[1]));
+    if (matches.length === 1) return matches[0];
+    if (matches.length > 1) {
+      const where = matches.map((s) => `"${s.item.title}" in ${s.state.projects.find((p) => p.id === s.item.projectId)?.name} (${s.item.id})`);
+      throw new LookupError(`#${numbered[1]} exists in more than one project: ${where.join(", ")}. Use the id.`);
+    }
+  }
   return pick2("task", ref, all, (s) => s.item.id, (s) => s.item.title);
 }
 function findMember(state, me2, ref, names) {
@@ -44713,7 +44777,7 @@ var ok = (value) => ({ content: [{ type: "text", text: typeof value === "string"
 var fail = (message) => ({ content: [{ type: "text", text: message }], isError: true });
 var INSTRUCTIONS = `Canban is a kanban board for small teams, stored on a Nostr relay.
 Companies hold people and projects; projects hold lanes (columns) and tasks (cards).
-Refer to projects, lanes, tasks and people by id or by exact name. Call whoami first if a tool says this agent has no access.
+Every task has a number within its project, shown as #0, #1, \u2026; refer to tasks by that number, id or title, and to projects, lanes and people by id or exact name. Call whoami first if a tool says this agent has no access.
 Changes appear live to everyone watching the board. Task bodies are markdown.`;
 function registerTools(server2, board2, me2) {
   const guard = (fn) => async (args) => {
@@ -44738,6 +44802,7 @@ function registerTools(server2, board2, me2) {
   };
   const taskView = (t, name, withBody = false) => ({
     id: t.id,
+    number: t.number,
     title: t.title,
     labels: t.labels,
     assignee: name(t.assignee),
@@ -44798,7 +44863,7 @@ function registerTools(server2, board2, me2) {
     {
       title: "Get task",
       description: "One task in full, including its markdown body and lane.",
-      inputSchema: { task: external_exports.string().describe("Task id (or a unique 6+ character prefix) or exact title") },
+      inputSchema: { task: external_exports.string().describe('Task number ("#12"), id, or exact title') },
       annotations: { readOnlyHint: true }
     },
     guard(async ({ task }) => {
@@ -44830,13 +44895,13 @@ function registerTools(server2, board2, me2) {
       const names = await board2.names(state.members.map((m) => m.pubkey));
       const assignee = args.assignee ? findMember(state, me2.pubkey, args.assignee, names).pubkey : void 0;
       const last = tasksInLane(state, lane.id).at(-1);
-      const { taskId, writes } = createTask(state.company.id, item.id, lane.id, args.title.trim(), last, {
+      const { taskId, number: number4, writes } = createTask(item, lane.id, args.title.trim(), last, {
         body: args.body,
         labels: cleanLabels(args.labels),
         assignee
       });
       await board2.apply(writes);
-      return ok({ created: taskId, lane: lane.name, project: item.name });
+      return ok({ created: taskId, number: number4, lane: lane.name, project: item.name });
     })
   );
   server2.registerTool(
@@ -44845,7 +44910,7 @@ function registerTools(server2, board2, me2) {
       title: "Update task",
       description: `Change a task's title, body, labels or assignee. Fields left out stay as they are. Pass assignee "" to unassign.`,
       inputSchema: {
-        task: external_exports.string().describe("Task id or exact title"),
+        task: external_exports.string().describe('Task number ("#12"), id, or exact title'),
         title: external_exports.string().min(1).optional(),
         body: external_exports.string().optional().describe("Replaces the whole markdown body"),
         labels: external_exports.array(external_exports.string()).optional().describe("Replaces all labels"),
@@ -44872,7 +44937,7 @@ function registerTools(server2, board2, me2) {
       title: "Move task",
       description: "Move a task to another lane (or reorder within one), at the top or bottom.",
       inputSchema: {
-        task: external_exports.string().describe("Task id or exact title"),
+        task: external_exports.string().describe('Task number ("#12"), id, or exact title'),
         lane: external_exports.string().describe("Destination lane id or name"),
         position: external_exports.enum(["top", "bottom"]).optional().describe("Defaults to bottom")
       }
@@ -44893,7 +44958,7 @@ function registerTools(server2, board2, me2) {
     {
       title: "Delete task",
       description: "Remove a task from the board for everyone.",
-      inputSchema: { task: external_exports.string().describe("Task id or exact title") },
+      inputSchema: { task: external_exports.string().describe('Task number ("#12"), id, or exact title') },
       annotations: { destructiveHint: true }
     },
     guard(async ({ task }) => {

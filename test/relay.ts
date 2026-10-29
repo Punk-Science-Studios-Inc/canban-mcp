@@ -24,13 +24,10 @@ function visible(viewer: string, event: NostrEvent, events: NostrEvent[]): boole
   return project ? canSee(state, project, viewer) : state.members.some((m) => m.pubkey === viewer && m.role !== 'member')
 }
 
-export async function startRelay(): Promise<TestRelay> {
-  const wss = new WebSocketServer({ port: 0 })
+export async function startRelay(port = 0, events: NostrEvent[] = [], allow = new Set<string>()): Promise<TestRelay> {
+  const wss = new WebSocketServer({ port })
   await new Promise<void>((r) => wss.once('listening', () => r()))
-  const port = (wss.address() as { port: number }).port
-  const url = `ws://127.0.0.1:${port}`
-  const events: NostrEvent[] = []
-  const allow = new Set<string>()
+  const url = `ws://127.0.0.1:${(wss.address() as { port: number }).port}`
   const subs = new Map<WebSocket, Map<string, Filter[]>>()
   const authed = new Map<WebSocket, string>()
 

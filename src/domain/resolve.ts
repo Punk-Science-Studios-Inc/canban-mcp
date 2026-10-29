@@ -77,6 +77,15 @@ export function latest(versions: Versions, allowed: (pubkey: string) => boolean)
   return best
 }
 
+function earliest(versions: Versions, allowed: (pubkey: string) => boolean): NostrEvent | undefined {
+  let first: NostrEvent | undefined
+  for (const event of versions) {
+    if (!allowed(event.pubkey)) continue
+    if (!first || event.created_at < first.created_at || (event.created_at === first.created_at && event.id < first.id)) first = event
+  }
+  return first
+}
+
 function content<T>(event: NostrEvent | undefined): T | undefined {
   if (!event) return undefined
   try {
@@ -107,7 +116,8 @@ function resolveCompany(companyId: string, ce: CompanyEvents): CompanyState | un
     const p = content<ProjectContent>(latest(versions, (pk) => admins.has(pk)))
     if (!p || p.removed) continue
     const assigned = (p.members ?? []).filter((pk) => memberSet.has(pk))
-    projects.push({ id: projectId, companyId, name: p.name, members: assigned })
+    const project: Project = { id: projectId, companyId, name: p.name, members: assigned, nextNumber: 0 }
+    projects.push(project)
 
     const writers = new Set([...admins, ...assigned])
     const allowed = (pk: string) => writers.has(pk)
@@ -120,10 +130,13 @@ function resolveCompany(companyId: string, ce: CompanyEvents): CompanyState | un
     lanes.push(...projectLanes)
 
     const laneIds = new Set(projectLanes.map((l) => l.id))
+    let highest = -1
     for (const [taskId, tv] of ce.tasks.get(projectId) ?? []) {
       const event = latest(tv, allowed)
       const t = content<TaskContent>(event)
+      if (event && t && Number.isInteger(t.number)) highest = Math.max(highest, t.number!)
       if (!event || !t || t.removed || projectLanes.length === 0) continue
+      const first = earliest(tv, allowed)!
       tasks.push({
         id: taskId,
         projectId,
@@ -133,10 +146,14 @@ function resolveCompany(companyId: string, ce: CompanyEvents): CompanyState | un
         order: t.order,
         assignee: t.assignee && memberSet.has(t.assignee) ? t.assignee : undefined,
         labels: t.labels ?? [],
+        number: Number.isInteger(t.number) ? t.number : undefined,
+        createdBy: first.pubkey,
+        createdAt: first.created_at,
         updatedBy: event.pubkey,
         updatedAt: event.created_at,
       })
     }
+    project.nextNumber = highest + 1
   }
   projects.sort((a, b) => a.name.localeCompare(b.name))
   tasks.sort(byOrder)

@@ -56,6 +56,15 @@ export function findLane(state: CompanyState, project: Project, ref?: string): L
 export function findTask(companies: CompanyState[], me: string, ref: string): Scoped<Task> {
   const visible = new Set(visibleProjects(companies, me).map((s) => s.item.id))
   const all = companies.flatMap((state) => state.tasks.filter((t) => visible.has(t.projectId)).map((item) => ({ state, item })))
+  const numbered = /^#?(\d+)$/.exec(ref.trim())
+  if (numbered) {
+    const matches = all.filter((s) => s.item.number === Number(numbered[1]))
+    if (matches.length === 1) return matches[0]
+    if (matches.length > 1) {
+      const where = matches.map((s) => `"${s.item.title}" in ${s.state.projects.find((p) => p.id === s.item.projectId)?.name} (${s.item.id})`)
+      throw new LookupError(`#${numbered[1]} exists in more than one project: ${where.join(', ')}. Use the id.`)
+    }
+  }
   return pick('task', ref, all, (s) => s.item.id, (s) => s.item.title)
 }
 

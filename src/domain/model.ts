@@ -24,6 +24,7 @@ export interface Project {
   companyId: string
   name: string
   members: string[]
+  nextNumber: number
 }
 
 export interface Lane {
@@ -42,6 +43,9 @@ export interface Task {
   order: number
   assignee?: string
   labels: string[]
+  number?: number
+  createdBy: string
+  createdAt: number
   updatedBy: string
   updatedAt: number
 }

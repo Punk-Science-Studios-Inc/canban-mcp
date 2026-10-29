@@ -51,28 +51,51 @@ export function updateLane(companyId: string, lane: Lane, patch: Partial<LaneCon
 }
 
 export function createTask(
-  companyId: string,
-  projectId: string,
+  project: Project,
   lane: string,
   title: string,
   last?: Task,
   extra: Partial<Pick<TaskContent, 'body' | 'labels' | 'assignee'>> = {},
-): { taskId: string; writes: Write[] } {
+): { taskId: string; number: number; writes: Write[] } {
   const taskId = newId()
+  const number = project.nextNumber
   return {
     taskId,
+    number,
     writes: [
       write(
-        { type: 'task', companyId, projectId, taskId },
-        { lane, title, body: extra.body ?? '', order: between(last?.order, undefined), labels: extra.labels ?? [], assignee: extra.assignee },
+        { type: 'task', companyId: project.companyId, projectId: project.id, taskId },
+        { lane, title, body: extra.body ?? '', order: between(last?.order, undefined), labels: extra.labels ?? [], assignee: extra.assignee, number },
       ),
     ],
   }
 }
 
 export function updateTask(companyId: string, task: Task, patch: Partial<TaskContent>): Write[] {
-  const { lane, title, body, order, assignee, labels } = task
-  return [write({ type: 'task', companyId, projectId: task.projectId, taskId: task.id }, { lane, title, body, order, assignee, labels, ...patch })]
+  const { lane, title, body, order, assignee, labels, number } = task
+  return [write({ type: 'task', companyId, projectId: task.projectId, taskId: task.id }, { lane, title, body, order, assignee, labels, number, ...patch })]
+}
+
+// Two people can pick the same number at once. The task created first keeps it; each later
+// one is renumbered by whoever created it, so every client agrees and only one writes.
+export function renumberings(state: CompanyState, me: string): Write[] {
+  const writes: Write[] = []
+  for (const project of state.projects) {
+    const byNumber = new Map<number, Task[]>()
+    for (const t of tasksOf(state, project.id)) {
+      if (t.number === undefined) continue
+      byNumber.set(t.number, [...(byNumber.get(t.number) ?? []), t])
+    }
+    let next = project.nextNumber
+    for (const group of byNumber.values()) {
+      if (group.length < 2) continue
+      group.sort((a, b) => a.createdAt - b.createdAt || a.id.localeCompare(b.id))
+      for (const loser of group.slice(1)) {
+        if (loser.createdBy === me) writes.push(...updateTask(state.company.id, loser, { number: next++ }))
+      }
+    }
+  }
+  return writes
 }
 
 export function lanesOf(state: CompanyState, projectId: string): Lane[] {

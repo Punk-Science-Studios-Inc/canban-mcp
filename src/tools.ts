@@ -13,7 +13,7 @@ const fail = (message: string): Result => ({ content: [{ type: 'text', text: mes
 
 export const INSTRUCTIONS = `Canban is a kanban board for small teams, stored on a Nostr relay.
 Companies hold people and projects; projects hold lanes (columns) and tasks (cards).
-Refer to projects, lanes, tasks and people by id or by exact name. Call whoami first if a tool says this agent has no access.
+Every task has a number within its project, shown as #0, #1, …; refer to tasks by that number, id or title, and to projects, lanes and people by id or exact name. Call whoami first if a tool says this agent has no access.
 Changes appear live to everyone watching the board. Task bodies are markdown.`
 
 export function registerTools(server: McpServer, board: Board, me: Identity): void {
@@ -39,6 +39,7 @@ export function registerTools(server: McpServer, board: Board, me: Identity): vo
   }
   const taskView = (t: Task, name: (pk?: string) => string | undefined, withBody = false) => ({
     id: t.id,
+    number: t.number,
     title: t.title,
     labels: t.labels,
     assignee: name(t.assignee),
@@ -103,7 +104,7 @@ export function registerTools(server: McpServer, board: Board, me: Identity): vo
     {
       title: 'Get task',
       description: 'One task in full, including its markdown body and lane.',
-      inputSchema: { task: z.string().describe('Task id (or a unique 6+ character prefix) or exact title') },
+      inputSchema: { task: z.string().describe('Task number ("#12"), id, or exact title') },
       annotations: { readOnlyHint: true },
     },
     guard(async ({ task }: { task: string }) => {
@@ -136,13 +137,13 @@ export function registerTools(server: McpServer, board: Board, me: Identity): vo
       const names = await board.names(state.members.map((m) => m.pubkey))
       const assignee = args.assignee ? findMember(state, me.pubkey, args.assignee, names).pubkey : undefined
       const last = commands.tasksInLane(state, lane.id).at(-1)
-      const { taskId, writes } = commands.createTask(state.company.id, item.id, lane.id, args.title.trim(), last, {
+      const { taskId, number, writes } = commands.createTask(item, lane.id, args.title.trim(), last, {
         body: args.body,
         labels: cleanLabels(args.labels),
         assignee,
       })
       await board.apply(writes)
-      return ok({ created: taskId, lane: lane.name, project: item.name })
+      return ok({ created: taskId, number, lane: lane.name, project: item.name })
     }),
   )
 
@@ -152,7 +153,7 @@ export function registerTools(server: McpServer, board: Board, me: Identity): vo
       title: 'Update task',
       description: 'Change a task\'s title, body, labels or assignee. Fields left out stay as they are. Pass assignee "" to unassign.',
       inputSchema: {
-        task: z.string().describe('Task id or exact title'),
+        task: z.string().describe('Task number ("#12"), id, or exact title'),
         title: z.string().min(1).optional(),
         body: z.string().optional().describe('Replaces the whole markdown body'),
         labels: z.array(z.string()).optional().describe('Replaces all labels'),
@@ -180,7 +181,7 @@ export function registerTools(server: McpServer, board: Board, me: Identity): vo
       title: 'Move task',
       description: 'Move a task to another lane (or reorder within one), at the top or bottom.',
       inputSchema: {
-        task: z.string().describe('Task id or exact title'),
+        task: z.string().describe('Task number ("#12"), id, or exact title'),
         lane: z.string().describe('Destination lane id or name'),
         position: z.enum(['top', 'bottom']).optional().describe('Defaults to bottom'),
       },
@@ -202,7 +203,7 @@ export function registerTools(server: McpServer, board: Board, me: Identity): vo
     {
       title: 'Delete task',
       description: 'Remove a task from the board for everyone.',
-      inputSchema: { task: z.string().describe('Task id or exact title') },
+      inputSchema: { task: z.string().describe('Task number ("#12"), id, or exact title') },
       annotations: { destructiveHint: true },
     },
     guard(async ({ task }: { task: string }) => {

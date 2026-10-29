@@ -162,7 +162,9 @@ Then restart the client. The key file is untouched, so the agent keeps its ident
 
 ## Using the tools
 
-Projects, lanes, tasks and people can be given by id or by exact name (case doesn't matter).
+Every task has a number within its project (`#0`, `#1`, …), starting at 0. Tasks can be given by
+number (`"#12"`), id or exact title; projects, lanes and people by id or exact name (case doesn't
+matter). If two projects both have a `#12`, use the task's id.
 `"me"` as an assignee means the agent. Changes appear live to everyone watching the board.
 
 | Tool | Does |

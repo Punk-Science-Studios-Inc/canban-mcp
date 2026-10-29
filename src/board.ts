@@ -3,7 +3,7 @@ import { finalizeEvent, getPublicKey } from 'nostr-tools/pure'
 import { dOf, template } from './domain/entities'
 import { APP_TAG, KIND, visibilityKey, type CompanyState } from './domain/model'
 import { resolve } from './domain/resolve'
-import type { Write } from './domain/commands'
+import { renumberings, type Write } from './domain/commands'
 
 export type Connection = 'connecting' | 'live' | 'denied' | 'offline'
 
@@ -116,12 +116,29 @@ export class Board {
   private scheduleRecheck(): void {
     clearTimeout(this.recheck)
     this.recheck = setTimeout(() => {
+      void this.healNumbers()
       const key = visibilityKey(this.companies(), this.me)
       if (key === this.visible || this.closed) return
       this.visible = key
       this.sub?.close()
       this.start()
     }, RESUBSCRIBE_MS)
+  }
+
+  private healing = false
+
+  private async healNumbers(): Promise<void> {
+    if (this.healing || this.connection !== 'live') return
+    const writes = [...this.companies().values()].flatMap((state) => renumberings(state, this.me))
+    if (!writes.length) return
+    this.healing = true
+    try {
+      await this.apply(writes)
+    } catch {
+      return
+    } finally {
+      this.healing = false
+    }
   }
 
   private markLoaded(): void {

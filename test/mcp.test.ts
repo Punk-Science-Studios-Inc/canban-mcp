@@ -100,6 +100,12 @@ describe('canban-mcp', () => {
     expect(task.updatedBy).toBe(agent.pubkey)
     expect(task.body).toBe('- tools\n- install')
 
+    expect(created.number).toBe(0)
+    const second = (await call('create_task', { project: 'Canban launch', title: 'Second' })).json()
+    expect(second.number).toBe(1)
+    expect((await call('get_task', { task: '#1' })).json()).toMatchObject({ title: 'Second', number: 1 })
+    await call('delete_task', { task: '#1' })
+
     await call('delete_task', { task: created.created })
     const after = (await call('get_board', { project: projectId })).json()
     expect(after.lanes.flatMap((l: { tasks: unknown[] }) => l.tasks)).toHaveLength(0)
@@ -124,7 +130,7 @@ describe('canban-mcp when access changes', () => {
     const company = [...(await import('../src/domain/resolve')).resolve(relay.events).values()][0]
     const hidden = company.projects.find((p) => p.id === hiddenId)!
     const lane = company.lanes.find((l) => l.projectId === hiddenId)!
-    await seed(commands.createTask(company.company.id, hiddenId, lane.id, 'Already here').writes)
+    await seed(commands.createTask(hidden, lane.id, 'Already here').writes)
     expect((await call('get_board', { project: hiddenId })).isError).toBe(true)
 
     await seed(commands.updateProject(hidden, { members: [owner, agent.pubkey] }))

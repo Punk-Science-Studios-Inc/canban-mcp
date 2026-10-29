@@ -32,6 +32,7 @@ export interface TaskContent {
   order: number
   assignee?: string
   labels: string[]
+  number?: number
   removed?: boolean
 }
 
