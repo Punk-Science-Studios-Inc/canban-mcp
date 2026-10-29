@@ -10,7 +10,7 @@ Canban server, no account and no API token.
 ## For AI agents: install and set up canban-mcp for your user
 
 Follow these steps in order. Each one says what to run, what you should see, and what to do if
-you don't. Run the commands yourself where you can; only step 4 needs the user.
+you don't. Run the commands yourself where you can; only step 5 needs the user.
 
 ### 1. Check Node.js
 
@@ -21,7 +21,29 @@ node --version
 You need **v22 or later**. If `node` is missing or older, stop and tell the user:
 "canban-mcp needs Node.js 22 or later. Install it from https://nodejs.org, then ask me again."
 
-### 2. Pick a key file for this agent
+### 2. Download the server
+
+macOS and Linux:
+
+```sh
+git clone --depth 1 https://github.com/Punk-Science-Studios-Inc/canban-mcp.git "$HOME/.local/share/canban-mcp" \
+  || git -C "$HOME/.local/share/canban-mcp" pull --ff-only
+```
+
+Windows (PowerShell):
+
+```powershell
+git clone --depth 1 https://github.com/Punk-Science-Studios-Inc/canban-mcp.git "$env:LOCALAPPDATA\canban-mcp"
+```
+
+There is nothing to build or install: `dist/canban-mcp.mjs` is a single self-contained file. The
+rest of this guide calls its **absolute path** `SERVER`, for example
+`/home/alex/.local/share/canban-mcp/dist/canban-mcp.mjs`. Expand `$HOME` or `%LOCALAPPDATA%`
+yourself; MCP config files do not.
+
+If `git` is missing, tell the user to install it and stop.
+
+### 3. Pick a key file for this agent
 
 Each agent gets its own Nostr key, so its changes on the board are labelled as its own and the
 user can remove it on its own. Choose a file name that names your client:
@@ -34,22 +56,28 @@ user can remove it on its own. Choose a file name that names your client:
 | Codex | `$HOME/.config/canban/codex.nsec` |
 | Anything else | `$HOME/.config/canban/<your-client-name>.nsec` |
 
-Use the **absolute path** (expand `$HOME` yourself) everywhere below. The rest of this guide
-calls it `KEY_FILE`.
+On Windows use `%APPDATA%\canban\<name>.nsec`. Use the absolute path everywhere below; the
+rest of this guide calls it `KEY_FILE`.
 
-### 3. Create the key and get its npub
+### 4. Create the key and get its npub
+
+macOS and Linux:
 
 ```sh
-CANBAN_KEY_FILE=KEY_FILE npx -y github:Punk-Science-Studios-Inc/canban-mcp --whoami
+CANBAN_KEY_FILE="KEY_FILE" node "SERVER" --whoami
+```
+
+Windows (PowerShell):
+
+```powershell
+$env:CANBAN_KEY_FILE = "KEY_FILE"; node "SERVER" --whoami
 ```
 
 Expected output: one line starting with `npub1`, plus, the first time, a note that a new key was
 saved. The key file is created readable only by the user. **Never print, copy or send the
 contents of the key file.** The npub is public and safe to show.
 
-If `npx` fails to reach GitHub, tell the user what failed and stop.
-
-### 4. Ask the user to let the agent in
+### 5. Ask the user to let the agent in
 
 Give the user this message, with the real npub and your name filled in:
 
@@ -62,16 +90,16 @@ Give the user this message, with the real npub and your name filled in:
 > person who added me isn't the company owner, the owner needs to open Canban once before I can
 > connect.
 
-Continue with step 5 while you wait; step 6 checks whether access has been granted.
+Carry on with the next step while you wait; the last step checks whether access has been granted.
 
-### 5. Register the server with your client
+### 6. Register the server with your client
 
-Replace `KEY_FILE` with the absolute path from step 2.
+Replace `SERVER` and `KEY_FILE` with the absolute paths from steps 2 and 3.
 
-**Claude Code** (run it; use `--scope user` so it works in every project):
+**Claude Code** (run it; `--scope user` makes it work in every project):
 
 ```sh
-claude mcp add canban --scope user -e CANBAN_KEY_FILE=KEY_FILE -- npx -y github:Punk-Science-Studios-Inc/canban-mcp
+claude mcp add canban --scope user -e CANBAN_KEY_FILE="KEY_FILE" -- node "SERVER"
 ```
 
 **Claude Desktop**: add this to `claude_desktop_config.json`, merging with any existing
@@ -85,8 +113,8 @@ claude mcp add canban --scope user -e CANBAN_KEY_FILE=KEY_FILE -- npx -y github:
 {
   "mcpServers": {
     "canban": {
-      "command": "npx",
-      "args": ["-y", "github:Punk-Science-Studios-Inc/canban-mcp"],
+      "command": "node",
+      "args": ["SERVER"],
       "env": { "CANBAN_KEY_FILE": "KEY_FILE" }
     }
   }
@@ -97,30 +125,38 @@ claude mcp add canban --scope user -e CANBAN_KEY_FILE=KEY_FILE -- npx -y github:
 
 ```toml
 [mcp_servers.canban]
-command = "npx"
-args = ["-y", "github:Punk-Science-Studios-Inc/canban-mcp"]
+command = "node"
+args = ["SERVER"]
 env = { CANBAN_KEY_FILE = "KEY_FILE" }
 ```
 
-**Any other MCP client**: register a **stdio** server with command `npx`, arguments
-`-y github:Punk-Science-Studios-Inc/canban-mcp`, and environment variable `CANBAN_KEY_FILE`. If
-you don't know where your client keeps its MCP config, ask the user rather than guessing.
+**Any other MCP client**: register a **stdio** server with command `node`, argument `SERVER`,
+and environment variable `CANBAN_KEY_FILE`. If you don't know where your client keeps its MCP
+config, ask the user rather than guessing.
 
 Most clients only load new MCP servers at the start of a session. If the `canban` tools don't
 appear, tell the user to restart the client or start a new session.
 
-### 6. Verify
+### 7. Verify
 
 Call the `whoami` tool.
 
 | Result | Meaning | Do this |
 |---|---|---|
 | `"relay": "live"` and a company in `companies` | Working | Call `list_projects` and tell the user which projects you can see |
-| `companies` is empty, or `relay` is `"denied"` | Not let in yet | Repeat the step 4 message. If the user says it's done, ask them to have the company owner open Canban, then call `whoami` again |
+| `companies` is empty, or `relay` is `"denied"` | Not let in yet | Repeat the step 5 message. If the user says it's done, ask them to have the company owner open Canban, then call `whoami` again |
 | A company but no projects | In the company, not on a project | Ask the user to tick you in the project's **Settings** |
 | `relay` is `"offline"` | Can't reach the relay | Tell the user `wss://relay.punkscience.ca` is unreachable |
 
 Setup is complete when `list_projects` returns at least one project with `"canEdit": true`.
+
+### Updating
+
+```sh
+git -C "$HOME/.local/share/canban-mcp" pull --ff-only
+```
+
+Then restart the client. The key file is untouched, so the agent keeps its identity.
 
 ---
 
