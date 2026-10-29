@@ -1,0 +1,74 @@
+import { WebSocketServer, type WebSocket } from 'ws'
+import { matchFilter, verifyEvent, type Filter, type NostrEvent } from 'nostr-tools'
+
+export interface TestRelay {
+  url: string
+  events: NostrEvent[]
+  allow: Set<string>
+  close: () => Promise<void>
+}
+
+export async function startRelay(): Promise<TestRelay> {
+  const wss = new WebSocketServer({ port: 0 })
+  await new Promise<void>((r) => wss.once('listening', () => r()))
+  const port = (wss.address() as { port: number }).port
+  const url = `ws://127.0.0.1:${port}`
+  const events: NostrEvent[] = []
+  const allow = new Set<string>()
+  const subs = new Map<WebSocket, Map<string, Filter[]>>()
+  const authed = new Map<WebSocket, string>()
+
+  wss.on('connection', (ws) => {
+    const challenge = Math.random().toString(36).slice(2)
+    subs.set(ws, new Map())
+    ws.send(JSON.stringify(['AUTH', challenge]))
+    const member = () => {
+      const pk = authed.get(ws)
+      if (!pk) return 'auth-required: test relay'
+      if (!allow.has(pk)) return 'restricted: not a member'
+      return ''
+    }
+    ws.on('message', (raw) => {
+      const [type, ...rest] = JSON.parse(raw.toString())
+      if (type === 'AUTH') {
+        const event = rest[0] as NostrEvent
+        const ok = verifyEvent(event) && event.kind === 22242 && event.tags.some((t) => t[0] === 'challenge' && t[1] === challenge)
+        if (ok) authed.set(ws, event.pubkey)
+        ws.send(JSON.stringify(['OK', event.id, ok, ok ? '' : 'invalid: auth']))
+      } else if (type === 'REQ') {
+        const [id, ...filters] = rest as [string, ...Filter[]]
+        const refused = member()
+        if (refused) return ws.send(JSON.stringify(['CLOSED', id, refused]))
+        subs.get(ws)!.set(id, filters)
+        for (const e of events) if (filters.some((f) => matchFilter(f, e))) ws.send(JSON.stringify(['EVENT', id, e]))
+        ws.send(JSON.stringify(['EOSE', id]))
+      } else if (type === 'CLOSE') {
+        subs.get(ws)!.delete(rest[0])
+      } else if (type === 'EVENT') {
+        const event = rest[0] as NostrEvent
+        const refused = member() || (verifyEvent(event) ? '' : 'invalid: signature')
+        if (refused) return ws.send(JSON.stringify(['OK', event.id, false, refused]))
+        events.push(event)
+        ws.send(JSON.stringify(['OK', event.id, true, '']))
+        for (const [peer, peerSubs] of subs) {
+          for (const [id, filters] of peerSubs) if (filters.some((f) => matchFilter(f, event))) peer.send(JSON.stringify(['EVENT', id, event]))
+        }
+      }
+    })
+    ws.on('close', () => {
+      subs.delete(ws)
+      authed.delete(ws)
+    })
+  })
+
+  return {
+    url,
+    events,
+    allow,
+    close: () =>
+      new Promise((r) => {
+        for (const ws of wss.clients) ws.terminate()
+        wss.close(() => r())
+      }),
+  }
+}
