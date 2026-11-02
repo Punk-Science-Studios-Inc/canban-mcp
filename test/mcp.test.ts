@@ -118,6 +118,16 @@ describe('canban-mcp', () => {
     expect(view.lanes.map((l: { name: string }) => l.name)).toEqual(['To do', 'In progress', 'Complete', 'QA'])
   })
 
+  it('reorders lanes', async () => {
+    const names = async () => (await call('get_board', { project: 'Canban launch' })).json().lanes.map((l: { name: string }) => l.name)
+    await call('move_lane', { project: 'Canban launch', lane: 'QA', position: 3 })
+    expect(await names()).toEqual(['To do', 'In progress', 'QA', 'Complete'])
+    await call('move_lane', { project: 'Canban launch', lane: 'Complete', position: 1 })
+    expect(await names()).toEqual(['Complete', 'To do', 'In progress', 'QA'])
+    await call('move_lane', { project: 'Canban launch', lane: 'Complete', position: 99 })
+    expect(await names()).toEqual(['To do', 'In progress', 'QA', 'Complete'])
+  })
+
   it('explains a bad reference instead of guessing', async () => {
     const result = await call('move_task', { task: 'nope', lane: 'Done' })
     expect(result.isError).toBe(true)

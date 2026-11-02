@@ -178,6 +178,7 @@ matter). If two projects both have a `#12`, use the task's id.
 | `move_task` | Move a task to a lane, at the top or bottom |
 | `delete_task` | Remove a task for everyone |
 | `create_lane`, `rename_lane` | Add a lane at the end, or rename one |
+| `move_lane` | Move a lane to a position, 1 being leftmost |
 | `list_people` | People in a company and their roles, for assigning |
 
 Good habits: call `get_board` before changing a board you haven't seen this session, prefer

@@ -1,6 +1,7 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { z } from 'zod'
 import * as commands from './domain/commands'
+import { between } from './domain/order'
 import type { CompanyState, Project, Task } from './domain/model'
 import type { Board } from './board'
 import type { Identity } from './identity'
@@ -242,6 +243,28 @@ export function registerTools(server: McpServer, board: Board, me: Identity): vo
       const lane = findLane(state, item, args.lane)
       await board.apply(commands.updateLane(state.company.id, lane, { name: args.name.trim() }))
       return ok({ renamed: lane.name, to: args.name.trim() })
+    }),
+  )
+
+  server.registerTool(
+    'move_lane',
+    {
+      title: 'Move lane',
+      description: 'Move a lane to a new position among the project lanes. Position 1 is the leftmost.',
+      inputSchema: {
+        project: z.string().describe('Project id or name'),
+        lane: z.string().describe('Lane id or name'),
+        position: z.number().int().min(1).describe('1 for leftmost; past the end means rightmost'),
+      },
+    },
+    guard(async (args: { project: string; lane: string; position: number }) => {
+      const { state, item } = findProject(mine(), me.pubkey, args.project)
+      writable(state, item)
+      const lane = findLane(state, item, args.lane)
+      const others = commands.lanesOf(state, item.id).filter((l) => l.id !== lane.id)
+      const at = Math.min(args.position, others.length + 1) - 1
+      await board.apply(commands.updateLane(state.company.id, lane, { order: between(others[at - 1]?.order, others[at]?.order) }))
+      return ok({ moved: lane.name, position: at + 1, lanes: [...others.slice(0, at), lane, ...others.slice(at)].map((l) => l.name) })
     }),
   )
 

@@ -45008,6 +45008,27 @@ function registerTools(server2, board2, me2) {
     })
   );
   server2.registerTool(
+    "move_lane",
+    {
+      title: "Move lane",
+      description: "Move a lane to a new position among the project lanes. Position 1 is the leftmost.",
+      inputSchema: {
+        project: external_exports.string().describe("Project id or name"),
+        lane: external_exports.string().describe("Lane id or name"),
+        position: external_exports.number().int().min(1).describe("1 for leftmost; past the end means rightmost")
+      }
+    },
+    guard(async (args) => {
+      const { state, item } = findProject(mine(), me2.pubkey, args.project);
+      writable(state, item);
+      const lane = findLane(state, item, args.lane);
+      const others = lanesOf(state, item.id).filter((l) => l.id !== lane.id);
+      const at = Math.min(args.position, others.length + 1) - 1;
+      await board2.apply(updateLane(state.company.id, lane, { order: between(others[at - 1]?.order, others[at]?.order) }));
+      return ok({ moved: lane.name, position: at + 1, lanes: [...others.slice(0, at), lane, ...others.slice(at)].map((l) => l.name) });
+    })
+  );
+  server2.registerTool(
     "list_people",
     {
       title: "List people",
