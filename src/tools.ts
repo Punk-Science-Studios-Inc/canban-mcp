@@ -5,7 +5,7 @@ import { between } from './domain/order'
 import type { CompanyState, Project, Task } from './domain/model'
 import type { Board } from './board'
 import type { Identity } from './identity'
-import { findCompany, findLane, findMember, findProject, findTask, LookupError, myCompanies, visibleProjects } from './lookup'
+import { findCompany, findLane, findMember, findProject, findTask, findTaskIn, LookupError, myCompanies, visibleProjects } from './lookup'
 
 type Result = { content: { type: 'text'; text: string }[]; isError?: boolean }
 
@@ -38,14 +38,34 @@ export function registerTools(server: McpServer, board: Board, me: Identity): vo
     const names = await board.names(state.members.map((m) => m.pubkey))
     return (pk?: string) => (pk ? names.get(pk) || state.members.find((m) => m.pubkey === pk)?.name || pk.slice(0, 8) : undefined)
   }
-  const taskView = (t: Task, name: (pk?: string) => string | undefined, withBody = false) => ({
-    id: t.id,
-    number: t.number,
-    title: t.title,
-    labels: t.labels,
-    assignee: name(t.assignee),
-    ...(withBody ? { body: t.body, updatedBy: name(t.updatedBy), updatedAt: new Date(t.updatedAt * 1000).toISOString() } : { hasBody: !!t.body }),
-  })
+  const ref = (t: Task) => (t.number !== undefined ? `#${t.number}` : t.id)
+  const taskView = (state: CompanyState, t: Task, name: (pk?: string) => string | undefined, withBody = false) => {
+    const waitingOn = commands.blockers(state, t)
+    const neededBy = withBody ? commands.dependents(state, t) : []
+    return {
+      id: t.id,
+      number: t.number,
+      title: t.title,
+      labels: t.labels,
+      assignee: name(t.assignee),
+      ...(t.dependsOn.length ? { dependsOn: t.dependsOn.map((id) => state.tasks.find((d) => d.id === id)).filter((d): d is Task => !!d).map(ref) } : {}),
+      ...(waitingOn.length ? { waitingOn: waitingOn.map(ref) } : {}),
+      ...(neededBy.length ? { neededBy: neededBy.map(ref) } : {}),
+      ...(withBody ? { body: t.body, updatedBy: name(t.updatedBy), updatedAt: new Date(t.updatedAt * 1000).toISOString() } : { hasBody: !!t.body }),
+    }
+  }
+
+  // Turns task references into ids in the same project, refusing self-references and loops.
+  const dependencyIds = (state: CompanyState, project: Project, refs: string[], task?: Task): string[] => {
+    const ids = [...new Set(refs.map((r) => findTaskIn(state, project, r).id))]
+    for (const id of ids) {
+      const on = state.tasks.find((t) => t.id === id)!
+      if (task && (id === task.id || commands.createsCycle(state, task, id))) {
+        throw new LookupError(`${ref(task)} can't depend on ${ref(on)}: ${ref(on)} already waits on ${ref(task)}, directly or through other tasks.`)
+      }
+    }
+    return ids
+  }
 
   server.registerTool(
     'whoami',
@@ -95,7 +115,7 @@ export function registerTools(server: McpServer, board: Board, me: Identity): vo
       const name = await nameOf(state)
       return ok({
         project: { id: item.id, name: item.name, people: item.members.map((pk) => name(pk)) },
-        lanes: commands.lanesOf(state, item.id).map((l) => ({ id: l.id, name: l.name, tasks: commands.tasksInLane(state, l.id).map((t) => taskView(t, name)) })),
+        lanes: commands.lanesOf(state, item.id).map((l) => ({ id: l.id, name: l.name, tasks: commands.tasksInLane(state, l.id).map((t) => taskView(state, t, name)) })),
       })
     }),
   )
@@ -113,7 +133,7 @@ export function registerTools(server: McpServer, board: Board, me: Identity): vo
       const name = await nameOf(state)
       const lane = state.lanes.find((l) => l.id === item.lane)
       const project = state.projects.find((p) => p.id === item.projectId)
-      return ok({ ...taskView(item, name, true), lane: lane?.name, project: project?.name })
+      return ok({ ...taskView(state, item, name, true), lane: lane?.name, project: project?.name })
     }),
   )
 
@@ -129,9 +149,10 @@ export function registerTools(server: McpServer, board: Board, me: Identity): vo
         body: z.string().optional().describe('Markdown description'),
         labels: z.array(z.string()).optional(),
         assignee: z.string().optional().describe('Person name, npub, or "me"'),
+        dependsOn: z.array(z.string()).optional().describe('Tasks in the same project that must be finished first, by number ("#3"), id or exact title'),
       },
     },
-    guard(async (args: { project: string; title: string; lane?: string; body?: string; labels?: string[]; assignee?: string }) => {
+    guard(async (args: { project: string; title: string; lane?: string; body?: string; labels?: string[]; assignee?: string; dependsOn?: string[] }) => {
       const { state, item } = findProject(mine(), me.pubkey, args.project)
       writable(state, item)
       const lane = findLane(state, item, args.lane)
@@ -142,6 +163,7 @@ export function registerTools(server: McpServer, board: Board, me: Identity): vo
         body: args.body,
         labels: cleanLabels(args.labels),
         assignee,
+        dependsOn: args.dependsOn ? dependencyIds(state, item, args.dependsOn) : [],
       })
       await board.apply(writes)
       return ok({ created: taskId, number, lane: lane.name, project: item.name })
@@ -152,24 +174,30 @@ export function registerTools(server: McpServer, board: Board, me: Identity): vo
     'update_task',
     {
       title: 'Update task',
-      description: 'Change a task\'s title, body, labels or assignee. Fields left out stay as they are. Pass assignee "" to unassign.',
+      description: 'Change a task\'s title, body, labels, assignee or dependencies. Fields left out stay as they are. Pass assignee "" to unassign.',
       inputSchema: {
         task: z.string().describe('Task number ("#12"), id, or exact title'),
         title: z.string().min(1).optional(),
         body: z.string().optional().describe('Replaces the whole markdown body'),
         labels: z.array(z.string()).optional().describe('Replaces all labels'),
         assignee: z.string().optional().describe('Person name, npub, "me", or "" to unassign'),
+        dependsOn: z
+          .array(z.string())
+          .optional()
+          .describe('Replaces the tasks this one waits on: tasks in the same project by number ("#3"), id or exact title; [] clears them'),
       },
     },
-    guard(async (args: { task: string; title?: string; body?: string; labels?: string[]; assignee?: string }) => {
+    guard(async (args: { task: string; title?: string; body?: string; labels?: string[]; assignee?: string; dependsOn?: string[] }) => {
       const { state, item } = findTask(mine(), me.pubkey, args.task)
-      writable(state, projectOf(state, item))
+      const project = projectOf(state, item)
+      writable(state, project)
       const names = await board.names(state.members.map((m) => m.pubkey))
       const patch = {
         ...(args.title !== undefined ? { title: args.title.trim() } : {}),
         ...(args.body !== undefined ? { body: args.body } : {}),
         ...(args.labels !== undefined ? { labels: cleanLabels(args.labels) } : {}),
         ...(args.assignee !== undefined ? { assignee: args.assignee.trim() ? findMember(state, me.pubkey, args.assignee, names).pubkey : undefined } : {}),
+        ...(args.dependsOn !== undefined ? { dependsOn: dependencyIds(state, project, args.dependsOn, item) } : {}),
       }
       await board.apply(commands.updateTask(state.company.id, item, patch))
       return ok({ updated: item.id, changed: Object.keys(patch) })

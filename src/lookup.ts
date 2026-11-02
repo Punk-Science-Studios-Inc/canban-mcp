@@ -68,6 +68,14 @@ export function findTask(companies: CompanyState[], me: string, ref: string): Sc
   return pick('task', ref, all, (s) => s.item.id, (s) => s.item.title)
 }
 
+// A task within one project, so "#3" means that project's #3.
+export function findTaskIn(state: CompanyState, project: Project, ref: string): Task {
+  const tasks = state.tasks.filter((t) => t.projectId === project.id)
+  const numbered = /^#?(\d+)$/.exec(ref.trim())
+  const hit = numbered ? tasks.find((t) => t.number === Number(numbered[1])) : undefined
+  return hit ?? pick('task', ref, tasks, (t) => t.id, (t) => t.title)
+}
+
 export function findMember(state: CompanyState, me: string, ref: string, names: Map<string, string>): Member {
   if (norm(ref) === 'me') return state.members.find((m) => m.pubkey === me)!
   let key = ref.trim()

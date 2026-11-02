@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { finalizeEvent, generateSecretKey, getPublicKey, type NostrEvent } from 'nostr-tools'
 import { template, type Address, type Content } from '../src/domain/entities'
 import { resolve } from '../src/domain/resolve'
+import { blockers, createsCycle, dependents } from '../src/domain/commands'
 
 const key = () => {
   const sk = generateSecretKey()
@@ -60,5 +61,18 @@ describe('resolve', () => {
   it('carries the name an admin gave a member', () => {
     const state = resolve([company, member(owner, alice.pk, 'member', 'alice')]).get(companyId)!
     expect(state.members.find((m) => m.pubkey === alice.pk)?.name).toBe('alice')
+  })
+
+  it('resolves task dependencies and what still blocks a task', () => {
+    const lanes = ['l1', 'l2'].map((laneId, i) => sign(owner, { type: 'lane', companyId, projectId: 'p1', laneId }, { name: laneId, order: i }))
+    const task = (taskId: string, laneId: string, dependsOn: string[]) =>
+      sign(owner, { type: 'task', companyId, projectId: 'p1', taskId }, { lane: laneId, title: taskId, body: '', order: 1, labels: [], dependsOn })
+    const state = resolve([company, project([]), ...lanes, task('a', 'l1', []), task('b', 'l2', []), task('c', 'l1', ['a', 'b', 'gone', 'c'])]).get(companyId)!
+    const byId = (id: string) => state.tasks.find((t) => t.id === id)!
+    expect(byId('c').dependsOn).toEqual(['a', 'b'])
+    expect(blockers(state, byId('c')).map((t) => t.id)).toEqual(['a'])
+    expect(dependents(state, byId('a')).map((t) => t.id)).toEqual(['c'])
+    expect(createsCycle(state, byId('a'), 'c')).toBe(true)
+    expect(createsCycle(state, byId('a'), 'b')).toBe(false)
   })
 })

@@ -55,7 +55,7 @@ export function createTask(
   lane: string,
   title: string,
   last?: Task,
-  extra: Partial<Pick<TaskContent, 'body' | 'labels' | 'assignee'>> = {},
+  extra: Partial<Pick<TaskContent, 'body' | 'labels' | 'assignee' | 'dependsOn'>> = {},
 ): { taskId: string; number: number; writes: Write[] } {
   const taskId = newId()
   const number = project.nextNumber
@@ -65,15 +65,45 @@ export function createTask(
     writes: [
       write(
         { type: 'task', companyId: project.companyId, projectId: project.id, taskId },
-        { lane, title, body: extra.body ?? '', order: between(last?.order, undefined), labels: extra.labels ?? [], assignee: extra.assignee, number },
+        { lane, title, body: extra.body ?? '', order: between(last?.order, undefined), labels: extra.labels ?? [], assignee: extra.assignee, number, dependsOn: extra.dependsOn ?? [] },
       ),
     ],
   }
 }
 
 export function updateTask(companyId: string, task: Task, patch: Partial<TaskContent>): Write[] {
-  const { lane, title, body, order, assignee, labels, number } = task
-  return [write({ type: 'task', companyId, projectId: task.projectId, taskId: task.id }, { lane, title, body, order, assignee, labels, number, ...patch })]
+  const { lane, title, body, order, assignee, labels, number, dependsOn } = task
+  return [write({ type: 'task', companyId, projectId: task.projectId, taskId: task.id }, { lane, title, body, order, assignee, labels, number, dependsOn, ...patch })]
+}
+
+// A task counts as done once it sits in its project's last lane.
+export function isDone(state: CompanyState, task: Task): boolean {
+  return lanesOf(state, task.projectId).at(-1)?.id === task.lane
+}
+
+// The unfinished tasks this one is waiting on.
+export function blockers(state: CompanyState, task: Task): Task[] {
+  return task.dependsOn.map((id) => state.tasks.find((t) => t.id === id)).filter((t): t is Task => !!t && !isDone(state, t))
+}
+
+// Tasks that list this one as a dependency.
+export function dependents(state: CompanyState, task: Task): Task[] {
+  return state.tasks.filter((t) => t.dependsOn.includes(task.id))
+}
+
+// True when making `task` depend on `on` would close a loop.
+export function createsCycle(state: CompanyState, task: Task, on: string): boolean {
+  const byId = new Map(state.tasks.map((t) => [t.id, t]))
+  const seen = new Set<string>()
+  const stack = [on]
+  while (stack.length) {
+    const id = stack.pop()!
+    if (id === task.id) return true
+    if (seen.has(id)) continue
+    seen.add(id)
+    stack.push(...(byId.get(id)?.dependsOn ?? []))
+  }
+  return false
 }
 
 // Two people can pick the same number at once. The task created first keeps it; each later

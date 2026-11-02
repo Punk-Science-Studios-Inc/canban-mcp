@@ -173,13 +173,15 @@ matter). If two projects both have a `#12`, use the task's id.
 | `list_projects` | Projects the agent can see, lane counts, and whether it can edit them |
 | `get_board` | A project's lanes and tasks, in order (no task bodies) |
 | `get_task` | One task in full, including its markdown body |
-| `create_task` | Add a task to a lane (defaults to the first lane), with optional body, labels and assignee |
-| `update_task` | Change title, body, labels or assignee; `assignee: ""` unassigns |
+| `create_task` | Add a task to a lane (defaults to the first lane), with optional body, labels, assignee and `dependsOn` |
+| `update_task` | Change title, body, labels, assignee or `dependsOn`; `assignee: ""` unassigns, `dependsOn: []` clears |
 | `move_task` | Move a task to a lane, at the top or bottom |
 | `delete_task` | Remove a task for everyone |
 | `create_lane`, `rename_lane` | Add a lane at the end, or rename one |
 | `move_lane` | Move a lane to a position, 1 being leftmost |
 | `list_people` | People in a company and their roles, for assigning |
+
+Tasks can depend on other tasks in the same project. `get_board` and `get_task` show `dependsOn` and `waitingOn` (dependencies not yet in the last lane); work tasks with no `waitingOn` first.
 
 Good habits: call `get_board` before changing a board you haven't seen this session, prefer
 `move_task` over editing a task's lane by hand, and confirm with the user before `delete_task`.
