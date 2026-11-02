@@ -181,6 +181,8 @@ matter). If two projects both have a `#12`, use the task's id.
 | `move_lane` | Move a lane to a position, 1 being leftmost |
 | `list_people` | People in a company and their roles, for assigning |
 
+Organizations without a subscription are on the free plan (1 project, 3 people); `whoami` shows each company's `plan`, and changes that would go past the free plan, or any change in an organization already over it, are refused with the reason.
+
 Tasks can depend on other tasks in the same project. `get_board` and `get_task` show `dependsOn` and `waitingOn` (dependencies not yet in the last lane); work tasks with no `waitingOn` first.
 
 Good habits: call `get_board` before changing a board you haven't seen this session, prefer

@@ -48063,6 +48063,7 @@ var verifyEvent3 = i3.verifyEvent;
 // src/domain/model.ts
 var KIND = 30078;
 var APP_TAG = "canban";
+var OPERATOR = "c14156fdd00160ff55221dadd8616475a318f6d8ca17392dc9ea513b2bac38fe";
 function ownerOf(companyId) {
   return companyId.split(".")[0];
 }
@@ -48371,6 +48372,56 @@ function canWrite(state, project, pubkey) {
   return state.members.some((m) => m.pubkey === pubkey && m.role !== "member") || project.members.includes(pubkey);
 }
 
+// src/domain/entitlements.ts
+var BILLING = "33d4228191df2857292cb601c65a978a9adfac4f1fd044d3616202af922b4642";
+var SUBSCRIPTIONS_D = "canban/subscriptions";
+var GRACE_DAYS = 7;
+var FREE_PROJECTS = 1;
+var FREE_PEOPLE = 3;
+function entitlement(list, companyId, today = (/* @__PURE__ */ new Date()).toISOString().slice(0, 10)) {
+  if (ownerOf(companyId) === OPERATOR) return "free";
+  const paidUntil = list?.orgs[companyId]?.paidUntil;
+  if (!paidUntil) return "unpaid";
+  if (today <= paidUntil) return "paid";
+  return today <= addDays(paidUntil, GRACE_DAYS) ? "grace" : "unpaid";
+}
+function addDays(date5, days) {
+  const d = /* @__PURE__ */ new Date(`${date5}T00:00:00Z`);
+  d.setUTCDate(d.getUTCDate() + days);
+  return d.toISOString().slice(0, 10);
+}
+function subscriptionListOf(events) {
+  let newest;
+  for (const e of events) {
+    if (e.pubkey !== BILLING || e.tags.find((t) => t[0] === "d")?.[1] !== SUBSCRIPTIONS_D) continue;
+    if (!newest || e.created_at > newest.created_at) newest = e;
+  }
+  try {
+    const list = newest && JSON.parse(newest.content);
+    return list && typeof list.orgs === "object" ? list : void 0;
+  } catch {
+    return void 0;
+  }
+}
+function withinFreeTier(state) {
+  return state.projects.length <= FREE_PROJECTS && state.members.length <= FREE_PEOPLE;
+}
+function blockedWrite(state, list, write2, today) {
+  if (entitlement(list, state.company.id, today) !== "unpaid") return void 0;
+  const { address, content: content2 } = write2;
+  const removing = "removed" in content2 && content2.removed || "role" in content2 && content2.role === "removed";
+  if (removing) return void 0;
+  const limits = `The free plan covers ${FREE_PROJECTS} project and ${FREE_PEOPLE} people. The organization owner can subscribe under Plan & billing.`;
+  if (!withinFreeTier(state)) return `This organization is read-only: it is over the free plan. ${limits}`;
+  if (address.type === "project" && !state.projects.some((p) => p.id === address.projectId) && state.projects.length >= FREE_PROJECTS) {
+    return `Adding another project needs a subscription. ${limits}`;
+  }
+  if (address.type === "member" && !state.members.some((m) => m.pubkey === address.pubkey) && state.members.length >= FREE_PEOPLE) {
+    return `Adding another person needs a subscription. ${limits}`;
+  }
+  return void 0;
+}
+
 // src/board.ts
 var READY_TIMEOUT = 1e4;
 var RETRY_MS = 3e3;
@@ -48443,7 +48494,17 @@ var Board = class {
   companies() {
     return resolve(this.events.values());
   }
+  subscriptions() {
+    return subscriptionListOf(this.events.values());
+  }
   async apply(writes) {
+    const companies = this.companies();
+    const list = this.subscriptions();
+    for (const write2 of writes) {
+      const state = companies.get(write2.address.companyId);
+      const blocked = state && blockedWrite(state, list, write2);
+      if (blocked) throw new Error(blocked);
+    }
     for (const { address, content: content2 } of writes) {
       const d = dOf(address);
       const createdAt = Math.max(Math.floor(Date.now() / 1e3), (this.newestByD.get(d) ?? 0) + 1);
@@ -48682,7 +48743,16 @@ function registerTools(server2, board2, me2) {
       return ok({
         npub: me2.npub,
         relay: board2.connection,
-        companies: companies.map((c) => ({ id: c.company.id, name: c.company.name, projects: visibleProjects([c], me2.pubkey).map((s) => s.item.name) })),
+        companies: companies.map((c) => {
+          const plan = entitlement(board2.subscriptions(), c.company.id);
+          return {
+            id: c.company.id,
+            name: c.company.name,
+            projects: visibleProjects([c], me2.pubkey).map((s) => s.item.name),
+            plan,
+            ...plan === "unpaid" && !withinFreeTier(c) ? { readOnly: "Over the free plan (1 project, 3 people); the owner can subscribe under Plan & billing." } : {}
+          };
+        }),
         ...companies.length === 0 || board2.connection === "denied" ? { nextStep: noAccess(me2) } : {}
       });
     }
