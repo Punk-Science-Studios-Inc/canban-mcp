@@ -45063,6 +45063,7 @@ if (process.argv.includes("--whoami")) {
 }
 var me = loadIdentity();
 if (me.created) console.error(`canban-mcp: new agent key saved to ${me.keyFile}. Add ${me.npub} on Canban's People page.`);
+process.on("unhandledRejection", (reason) => console.error("canban-mcp: unhandled rejection:", reason));
 var board = new Board(RELAY, me.secret);
 board.start();
 var server = new McpServer({ name: "canban", version: "0.1.0" }, { instructions: INSTRUCTIONS });
