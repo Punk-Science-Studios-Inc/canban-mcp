@@ -44,6 +44,7 @@ export interface Task {
   assignee?: string
   labels: string[]
   number?: number
+  dependsOn: string[]
   createdBy: string
   createdAt: number
   updatedBy: string

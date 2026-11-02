@@ -111,6 +111,28 @@ describe('canban-mcp', () => {
     expect(after.lanes.flatMap((l: { tasks: unknown[] }) => l.tasks)).toHaveLength(0)
   })
 
+  it('tracks which tasks wait on which', async () => {
+    const first = (await call('create_task', { project: 'Canban launch', title: 'Schema' })).json()
+    const second = (await call('create_task', { project: 'Canban launch', title: 'API', dependsOn: [`#${first.number}`] })).json()
+    let api = (await call('get_task', { task: second.created })).json()
+    expect(api.dependsOn).toEqual([`#${first.number}`])
+    expect(api.waitingOn).toEqual([`#${first.number}`])
+    expect((await call('get_task', { task: first.created })).json().neededBy).toEqual([`#${second.number}`])
+
+    const loop = await call('update_task', { task: first.created, dependsOn: [`#${second.number}`] })
+    expect(loop.isError).toBe(true)
+    expect(loop.text).toMatch(/already waits on/)
+
+    await call('move_task', { task: first.created, lane: 'Complete' })
+    api = (await call('get_task', { task: second.created })).json()
+    expect(api.waitingOn).toBeUndefined()
+
+    await call('update_task', { task: second.created, dependsOn: [] })
+    expect((await call('get_task', { task: second.created })).json().dependsOn).toBeUndefined()
+    await call('delete_task', { task: first.created })
+    await call('delete_task', { task: second.created })
+  })
+
   it('adds and renames lanes', async () => {
     await call('create_lane', { project: 'Canban launch', name: 'Review' })
     await call('rename_lane', { project: 'Canban launch', lane: 'Review', name: 'QA' })

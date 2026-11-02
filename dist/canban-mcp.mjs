@@ -48245,6 +48245,7 @@ function resolveCompany(companyId, ce) {
         assignee: t.assignee && memberSet.has(t.assignee) ? t.assignee : void 0,
         labels: t.labels ?? [],
         number: Number.isInteger(t.number) ? t.number : void 0,
+        dependsOn: Array.isArray(t.dependsOn) ? t.dependsOn : [],
         createdBy: first.pubkey,
         createdAt: first.created_at,
         updatedBy: event.pubkey,
@@ -48255,6 +48256,8 @@ function resolveCompany(companyId, ce) {
   }
   projects.sort((a, b) => a.name.localeCompare(b.name));
   tasks.sort(byOrder);
+  const projectOf2 = new Map(tasks.map((t) => [t.id, t.projectId]));
+  for (const t of tasks) t.dependsOn = [...new Set(t.dependsOn)].filter((id) => id !== t.id && projectOf2.get(id) === t.projectId);
   return { company: { id: companyId, owner, name: company.name }, members: members2, projects, lanes, tasks };
 }
 function resolveRoles(owner, versions) {
@@ -48305,14 +48308,36 @@ function createTask(project, lane, title, last, extra = {}) {
     writes: [
       write(
         { type: "task", companyId: project.companyId, projectId: project.id, taskId },
-        { lane, title, body: extra.body ?? "", order: between(last?.order, void 0), labels: extra.labels ?? [], assignee: extra.assignee, number: number4 }
+        { lane, title, body: extra.body ?? "", order: between(last?.order, void 0), labels: extra.labels ?? [], assignee: extra.assignee, number: number4, dependsOn: extra.dependsOn ?? [] }
       )
     ]
   };
 }
 function updateTask(companyId, task, patch) {
-  const { lane, title, body, order, assignee, labels, number: number4 } = task;
-  return [write({ type: "task", companyId, projectId: task.projectId, taskId: task.id }, { lane, title, body, order, assignee, labels, number: number4, ...patch })];
+  const { lane, title, body, order, assignee, labels, number: number4, dependsOn } = task;
+  return [write({ type: "task", companyId, projectId: task.projectId, taskId: task.id }, { lane, title, body, order, assignee, labels, number: number4, dependsOn, ...patch })];
+}
+function isDone(state, task) {
+  return lanesOf(state, task.projectId).at(-1)?.id === task.lane;
+}
+function blockers(state, task) {
+  return task.dependsOn.map((id) => state.tasks.find((t) => t.id === id)).filter((t) => !!t && !isDone(state, t));
+}
+function dependents(state, task) {
+  return state.tasks.filter((t) => t.dependsOn.includes(task.id));
+}
+function createsCycle(state, task, on) {
+  const byId = new Map(state.tasks.map((t) => [t.id, t]));
+  const seen = /* @__PURE__ */ new Set();
+  const stack = [on];
+  while (stack.length) {
+    const id = stack.pop();
+    if (id === task.id) return true;
+    if (seen.has(id)) continue;
+    seen.add(id);
+    stack.push(...byId.get(id)?.dependsOn ?? []);
+  }
+  return false;
 }
 function renumberings(state, me2) {
   const writes = [];
@@ -48570,6 +48595,12 @@ function findTask(companies, me2, ref) {
   }
   return pick2("task", ref, all, (s) => s.item.id, (s) => s.item.title);
 }
+function findTaskIn(state, project, ref) {
+  const tasks = state.tasks.filter((t) => t.projectId === project.id);
+  const numbered = /^#?(\d+)$/.exec(ref.trim());
+  const hit = numbered ? tasks.find((t) => t.number === Number(numbered[1])) : void 0;
+  return hit ?? pick2("task", ref, tasks, (t) => t.id, (t) => t.title);
+}
 function findMember(state, me2, ref, names) {
   if (norm(ref) === "me") return state.members.find((m) => m.pubkey === me2);
   let key = ref.trim();
@@ -48612,14 +48643,32 @@ function registerTools(server2, board2, me2) {
     const names = await board2.names(state.members.map((m) => m.pubkey));
     return (pk) => pk ? names.get(pk) || state.members.find((m) => m.pubkey === pk)?.name || pk.slice(0, 8) : void 0;
   };
-  const taskView = (t, name, withBody = false) => ({
-    id: t.id,
-    number: t.number,
-    title: t.title,
-    labels: t.labels,
-    assignee: name(t.assignee),
-    ...withBody ? { body: t.body, updatedBy: name(t.updatedBy), updatedAt: new Date(t.updatedAt * 1e3).toISOString() } : { hasBody: !!t.body }
-  });
+  const ref = (t) => t.number !== void 0 ? `#${t.number}` : t.id;
+  const taskView = (state, t, name, withBody = false) => {
+    const waitingOn = blockers(state, t);
+    const neededBy = withBody ? dependents(state, t) : [];
+    return {
+      id: t.id,
+      number: t.number,
+      title: t.title,
+      labels: t.labels,
+      assignee: name(t.assignee),
+      ...t.dependsOn.length ? { dependsOn: t.dependsOn.map((id) => state.tasks.find((d) => d.id === id)).filter((d) => !!d).map(ref) } : {},
+      ...waitingOn.length ? { waitingOn: waitingOn.map(ref) } : {},
+      ...neededBy.length ? { neededBy: neededBy.map(ref) } : {},
+      ...withBody ? { body: t.body, updatedBy: name(t.updatedBy), updatedAt: new Date(t.updatedAt * 1e3).toISOString() } : { hasBody: !!t.body }
+    };
+  };
+  const dependencyIds = (state, project, refs, task) => {
+    const ids = [...new Set(refs.map((r) => findTaskIn(state, project, r).id))];
+    for (const id of ids) {
+      const on = state.tasks.find((t) => t.id === id);
+      if (task && (id === task.id || createsCycle(state, task, id))) {
+        throw new LookupError(`${ref(task)} can't depend on ${ref(on)}: ${ref(on)} already waits on ${ref(task)}, directly or through other tasks.`);
+      }
+    }
+    return ids;
+  };
   server2.registerTool(
     "whoami",
     {
@@ -48666,7 +48715,7 @@ function registerTools(server2, board2, me2) {
       const name = await nameOf(state);
       return ok({
         project: { id: item.id, name: item.name, people: item.members.map((pk) => name(pk)) },
-        lanes: lanesOf(state, item.id).map((l) => ({ id: l.id, name: l.name, tasks: tasksInLane(state, l.id).map((t) => taskView(t, name)) }))
+        lanes: lanesOf(state, item.id).map((l) => ({ id: l.id, name: l.name, tasks: tasksInLane(state, l.id).map((t) => taskView(state, t, name)) }))
       });
     })
   );
@@ -48683,7 +48732,7 @@ function registerTools(server2, board2, me2) {
       const name = await nameOf(state);
       const lane = state.lanes.find((l) => l.id === item.lane);
       const project = state.projects.find((p) => p.id === item.projectId);
-      return ok({ ...taskView(item, name, true), lane: lane?.name, project: project?.name });
+      return ok({ ...taskView(state, item, name, true), lane: lane?.name, project: project?.name });
     })
   );
   server2.registerTool(
@@ -48697,7 +48746,8 @@ function registerTools(server2, board2, me2) {
         lane: external_exports.string().optional().describe("Lane id or name; defaults to the first lane"),
         body: external_exports.string().optional().describe("Markdown description"),
         labels: external_exports.array(external_exports.string()).optional(),
-        assignee: external_exports.string().optional().describe('Person name, npub, or "me"')
+        assignee: external_exports.string().optional().describe('Person name, npub, or "me"'),
+        dependsOn: external_exports.array(external_exports.string()).optional().describe('Tasks in the same project that must be finished first, by number ("#3"), id or exact title')
       }
     },
     guard(async (args) => {
@@ -48710,7 +48760,8 @@ function registerTools(server2, board2, me2) {
       const { taskId, number: number4, writes } = createTask(item, lane.id, args.title.trim(), last, {
         body: args.body,
         labels: cleanLabels(args.labels),
-        assignee
+        assignee,
+        dependsOn: args.dependsOn ? dependencyIds(state, item, args.dependsOn) : []
       });
       await board2.apply(writes);
       return ok({ created: taskId, number: number4, lane: lane.name, project: item.name });
@@ -48720,24 +48771,27 @@ function registerTools(server2, board2, me2) {
     "update_task",
     {
       title: "Update task",
-      description: `Change a task's title, body, labels or assignee. Fields left out stay as they are. Pass assignee "" to unassign.`,
+      description: `Change a task's title, body, labels, assignee or dependencies. Fields left out stay as they are. Pass assignee "" to unassign.`,
       inputSchema: {
         task: external_exports.string().describe('Task number ("#12"), id, or exact title'),
         title: external_exports.string().min(1).optional(),
         body: external_exports.string().optional().describe("Replaces the whole markdown body"),
         labels: external_exports.array(external_exports.string()).optional().describe("Replaces all labels"),
-        assignee: external_exports.string().optional().describe('Person name, npub, "me", or "" to unassign')
+        assignee: external_exports.string().optional().describe('Person name, npub, "me", or "" to unassign'),
+        dependsOn: external_exports.array(external_exports.string()).optional().describe('Replaces the tasks this one waits on: tasks in the same project by number ("#3"), id or exact title; [] clears them')
       }
     },
     guard(async (args) => {
       const { state, item } = findTask(mine(), me2.pubkey, args.task);
-      writable(state, projectOf(state, item));
+      const project = projectOf(state, item);
+      writable(state, project);
       const names = await board2.names(state.members.map((m) => m.pubkey));
       const patch = {
         ...args.title !== void 0 ? { title: args.title.trim() } : {},
         ...args.body !== void 0 ? { body: args.body } : {},
         ...args.labels !== void 0 ? { labels: cleanLabels(args.labels) } : {},
-        ...args.assignee !== void 0 ? { assignee: args.assignee.trim() ? findMember(state, me2.pubkey, args.assignee, names).pubkey : void 0 } : {}
+        ...args.assignee !== void 0 ? { assignee: args.assignee.trim() ? findMember(state, me2.pubkey, args.assignee, names).pubkey : void 0 } : {},
+        ...args.dependsOn !== void 0 ? { dependsOn: dependencyIds(state, project, args.dependsOn, item) } : {}
       };
       await board2.apply(updateTask(state.company.id, item, patch));
       return ok({ updated: item.id, changed: Object.keys(patch) });

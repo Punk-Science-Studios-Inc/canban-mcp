@@ -33,6 +33,8 @@ export interface TaskContent {
   assignee?: string
   labels: string[]
   number?: number
+  // Ids of tasks in the same project that must be finished first.
+  dependsOn?: string[]
   removed?: boolean
 }
 

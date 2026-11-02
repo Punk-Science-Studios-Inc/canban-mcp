@@ -147,6 +147,7 @@ function resolveCompany(companyId: string, ce: CompanyEvents): CompanyState | un
         assignee: t.assignee && memberSet.has(t.assignee) ? t.assignee : undefined,
         labels: t.labels ?? [],
         number: Number.isInteger(t.number) ? t.number : undefined,
+        dependsOn: Array.isArray(t.dependsOn) ? t.dependsOn : [],
         createdBy: first.pubkey,
         createdAt: first.created_at,
         updatedBy: event.pubkey,
@@ -157,6 +158,8 @@ function resolveCompany(companyId: string, ce: CompanyEvents): CompanyState | un
   }
   projects.sort((a, b) => a.name.localeCompare(b.name))
   tasks.sort(byOrder)
+  const projectOf = new Map(tasks.map((t) => [t.id, t.projectId]))
+  for (const t of tasks) t.dependsOn = [...new Set(t.dependsOn)].filter((id) => id !== t.id && projectOf.get(id) === t.projectId)
 
   return { company: { id: companyId, owner, name: company.name }, members, projects, lanes, tasks }
 }
