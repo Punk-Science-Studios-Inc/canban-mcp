@@ -6,6 +6,7 @@ import { dOf, template } from './domain/entities'
 import { APP_TAG, KIND, visibilityKey, type CompanyState } from './domain/model'
 import { resolve } from './domain/resolve'
 import { renumberings, type Write } from './domain/commands'
+import { blockedWrite, subscriptionListOf, type SubscriptionList } from './domain/entitlements'
 
 export type Connection = 'connecting' | 'live' | 'denied' | 'offline'
 
@@ -90,7 +91,18 @@ export class Board {
     return resolve(this.events.values())
   }
 
+  subscriptions(): SubscriptionList | undefined {
+    return subscriptionListOf(this.events.values())
+  }
+
   async apply(writes: Write[]): Promise<void> {
+    const companies = this.companies()
+    const list = this.subscriptions()
+    for (const write of writes) {
+      const state = companies.get(write.address.companyId)
+      const blocked = state && blockedWrite(state, list, write)
+      if (blocked) throw new Error(blocked)
+    }
     for (const { address, content } of writes) {
       const d = dOf(address)
       const createdAt = Math.max(Math.floor(Date.now() / 1000), (this.newestByD.get(d) ?? 0) + 1)

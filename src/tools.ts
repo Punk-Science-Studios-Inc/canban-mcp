@@ -2,6 +2,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { z } from 'zod'
 import * as commands from './domain/commands'
 import { between } from './domain/order'
+import { entitlement, withinFreeTier } from './domain/entitlements'
 import type { CompanyState, Project, Task } from './domain/model'
 import type { Board } from './board'
 import type { Identity } from './identity'
@@ -80,7 +81,16 @@ export function registerTools(server: McpServer, board: Board, me: Identity): vo
       return ok({
         npub: me.npub,
         relay: board.connection,
-        companies: companies.map((c) => ({ id: c.company.id, name: c.company.name, projects: visibleProjects([c], me.pubkey).map((s) => s.item.name) })),
+        companies: companies.map((c) => {
+          const plan = entitlement(board.subscriptions(), c.company.id)
+          return {
+            id: c.company.id,
+            name: c.company.name,
+            projects: visibleProjects([c], me.pubkey).map((s) => s.item.name),
+            plan,
+            ...(plan === 'unpaid' && !withinFreeTier(c) ? { readOnly: 'Over the free plan (1 project, 3 people); the owner can subscribe under Plan & billing.' } : {}),
+          }
+        }),
         ...(companies.length === 0 || board.connection === 'denied' ? { nextStep: noAccess(me) } : {}),
       })
     },
