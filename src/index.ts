@@ -17,6 +17,9 @@ if (process.argv.includes('--whoami')) {
 const me = loadIdentity()
 if (me.created) console.error(`canban-mcp: new agent key saved to ${me.keyFile}. Add ${me.npub} on Canban's People page.`)
 
+// A long-running server must not exit over one stray relay error; log it and carry on.
+process.on('unhandledRejection', (reason) => console.error('canban-mcp: unhandled rejection:', reason))
+
 const board = new Board(RELAY, me.secret)
 board.start()
 

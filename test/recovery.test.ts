@@ -33,6 +33,8 @@ beforeAll(async () => {
 })
 
 afterAll(async () => {
+  console.error(`server stderr:
+${stderr.trim()}`)
   await client?.close()
   await relay?.close()
 })
