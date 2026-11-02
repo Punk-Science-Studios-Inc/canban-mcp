@@ -1,4 +1,6 @@
 import { SimplePool, type NostrEvent } from 'nostr-tools'
+import { useWebSocketImplementation } from 'nostr-tools/pool'
+import WebSocket from 'ws'
 import { finalizeEvent, getPublicKey } from 'nostr-tools/pure'
 import { dOf, template } from './domain/entities'
 import { APP_TAG, KIND, visibilityKey, type CompanyState } from './domain/model'
@@ -13,6 +15,10 @@ const RESUBSCRIBE_MS = 400
 // A live subscription can go quiet without closing (a dropped socket the relay never reports),
 // so a read after this long asks the relay again in full.
 const STALE_MS = 30_000
+// Node's built-in WebSocket fires `error` synchronously from close() while connecting, and
+// nostr-tools closes from its error handler, so a failed connect recursed until the stack overflowed.
+useWebSocketImplementation(WebSocket)
+
 export const PROFILE_RELAYS = ['wss://purplepag.es', 'wss://relay.primal.net', 'wss://relay.damus.io', 'wss://nos.lol']
 
 export class Board {
