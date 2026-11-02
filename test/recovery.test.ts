@@ -14,6 +14,8 @@ let relay: TestRelay
 let client: Client
 let stderr = ''
 const keyFile = join(mkdtempSync(join(tmpdir(), 'canban-mcp-')), 'agent.nsec')
+const ownerKey = generateSecretKey()
+let launch: { companyId: string; projectId: string }
 
 const whoami = async () => JSON.parse(((await client.callTool({ name: 'whoami', arguments: {} })).content as { text: string }[])[0].text)
 
@@ -39,13 +41,13 @@ it('starts working once access is granted, without reconnecting', async () => {
   const before = await whoami()
   expect(before.relay).toBe('denied')
 
-  const ownerKey = generateSecretKey()
   const owner = getPublicKey(ownerKey)
   const agent = (await import('nostr-tools')).nip19.decode(before.npub as `npub1${string}`).data
   relay.allow.add(owner)
   relay.allow.add(agent)
   const company = commands.createCompany(owner, 'Punk Science')
   const project = commands.createProject(company.companyId, 'Launch', [owner, agent])
+  launch = { companyId: company.companyId, projectId: project.projectId }
   const pool = new SimplePool()
   pool.automaticallyAuth = () => async (e) => finalizeEvent(e, ownerKey)
   let at = Math.floor(Date.now() / 1000)
@@ -84,4 +86,21 @@ it('keeps working after the relay restarts', async () => {
   console.error(`after restart: relay=${me.relay} createError=${created.isError} ${(created.content as { text: string }[])[0].text.slice(0, 120)}`)
   expect(me.relay).toBe('live')
   expect(created.isError).toBeFalsy()
+}, 60_000)
+
+it('picks up changes a quiet subscription missed', async () => {
+  await client.callTool({ name: 'list_projects', arguments: {} })
+  relay.mute = true
+  const pool = new SimplePool()
+  pool.automaticallyAuth = () => async (e) => finalizeEvent(e, ownerKey)
+  let at = Math.floor(Date.now() / 1000)
+  for (const { address, content } of commands.createLane(launch.companyId, launch.projectId, 'Missed')) {
+    await Promise.any(pool.publish([relay.url], finalizeEvent(template(address, content as never, at++), ownerKey), { onauth: async (e) => finalizeEvent(e, ownerKey) }))
+  }
+  pool.destroy()
+
+  const board = async () => ((await client.callTool({ name: 'get_board', arguments: { project: 'Launch' } })).content as { text: string }[])[0].text
+  expect(await board()).not.toContain('Missed')
+  await new Promise((r) => setTimeout(r, 31_000))
+  expect(await board()).toContain('Missed')
 }, 60_000)

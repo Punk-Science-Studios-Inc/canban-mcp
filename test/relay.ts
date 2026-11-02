@@ -8,6 +8,8 @@ export interface TestRelay {
   url: string
   events: NostrEvent[]
   allow: Set<string>
+  // Stops sending live events while keeping connections open, like a subscription gone quiet.
+  mute: boolean
   close: () => Promise<void>
 }
 
@@ -64,6 +66,7 @@ export async function startRelay(port = 0, events: NostrEvent[] = [], allow = ne
         if (refused) return ws.send(JSON.stringify(['OK', event.id, false, refused]))
         events.push(event)
         ws.send(JSON.stringify(['OK', event.id, true, '']))
+        if (relay.mute) return
         for (const [peer, peerSubs] of subs) {
           const viewer = authed.get(peer)
           if (!viewer || !visible(viewer, event, events)) continue
@@ -77,14 +80,16 @@ export async function startRelay(port = 0, events: NostrEvent[] = [], allow = ne
     })
   })
 
-  return {
+  const relay: TestRelay = {
     url,
     events,
     allow,
+    mute: false,
     close: () =>
       new Promise((r) => {
         for (const ws of wss.clients) ws.terminate()
         wss.close(() => r())
       }),
   }
+  return relay
 }

@@ -44549,6 +44549,7 @@ function canWrite(state, project, pubkey) {
 var READY_TIMEOUT = 1e4;
 var RETRY_MS = 3e3;
 var RESUBSCRIBE_MS = 400;
+var STALE_MS = 3e4;
 var PROFILE_RELAYS = ["wss://purplepag.es", "wss://relay.primal.net", "wss://relay.damus.io", "wss://nos.lol"];
 var Board = class {
   constructor(relay, secret, profileRelays = PROFILE_RELAYS) {
@@ -44565,9 +44566,12 @@ var Board = class {
   lastError = "";
   events = /* @__PURE__ */ new Map();
   newestByD = /* @__PURE__ */ new Map();
-  pool = new SimplePool({ enablePing: true, enableReconnect: true });
+  // No automatic reconnect: nostr-tools resumes with `since` = the newest event seen, which drops
+  // anything stamped earlier. A dropped connection closes the subscription and start() asks again.
+  pool = new SimplePool({ enablePing: true, enableReconnect: false });
   profiles = /* @__PURE__ */ new Map();
   loaded = false;
+  loadedAt = 0;
   waiters = [];
   sub;
   closed = false;
@@ -44580,6 +44584,7 @@ var Board = class {
       onevent: (event) => this.add(event),
       oneose: () => {
         this.connection = "live";
+        this.loadedAt = Date.now();
         this.visible = visibilityKey(this.companies(), this.me);
         this.markLoaded();
       },
@@ -44600,6 +44605,11 @@ var Board = class {
     this.pool.destroy();
   }
   async ready() {
+    if (this.loaded && this.connection === "live" && Date.now() - this.loadedAt > STALE_MS) {
+      this.loaded = false;
+      this.sub?.close();
+      this.start();
+    }
     if (this.loaded) return;
     await Promise.race([new Promise((r) => this.waiters.push(r)), new Promise((r) => setTimeout(r, READY_TIMEOUT))]);
   }

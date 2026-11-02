@@ -10,6 +10,9 @@ export type Connection = 'connecting' | 'live' | 'denied' | 'offline'
 const READY_TIMEOUT = 10_000
 const RETRY_MS = 3_000
 const RESUBSCRIBE_MS = 400
+// A live subscription can go quiet without closing (a dropped socket the relay never reports),
+// so a read after this long asks the relay again in full.
+const STALE_MS = 30_000
 export const PROFILE_RELAYS = ['wss://purplepag.es', 'wss://relay.primal.net', 'wss://relay.damus.io', 'wss://nos.lol']
 
 export class Board {
@@ -17,9 +20,12 @@ export class Board {
   lastError = ''
   private events = new Map<string, NostrEvent>()
   private newestByD = new Map<string, number>()
-  private pool = new SimplePool({ enablePing: true, enableReconnect: true })
+  // No automatic reconnect: nostr-tools resumes with `since` = the newest event seen, which drops
+  // anything stamped earlier. A dropped connection closes the subscription and start() asks again.
+  private pool = new SimplePool({ enablePing: true, enableReconnect: false })
   private profiles = new Map<string, string>()
   private loaded = false
+  private loadedAt = 0
   private waiters: (() => void)[] = []
   private sub?: { close: () => void }
   private closed = false
@@ -42,6 +48,7 @@ export class Board {
       onevent: (event) => this.add(event),
       oneose: () => {
         this.connection = 'live'
+        this.loadedAt = Date.now()
         this.visible = visibilityKey(this.companies(), this.me)
         this.markLoaded()
       },
@@ -64,6 +71,11 @@ export class Board {
   }
 
   async ready(): Promise<void> {
+    if (this.loaded && this.connection === 'live' && Date.now() - this.loadedAt > STALE_MS) {
+      this.loaded = false
+      this.sub?.close()
+      this.start()
+    }
     if (this.loaded) return
     await Promise.race([new Promise<void>((r) => this.waiters.push(r)), new Promise<void>((r) => setTimeout(r, READY_TIMEOUT))])
   }
