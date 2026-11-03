@@ -69,6 +69,8 @@ export interface CompanyState {
   // must replace it.
   holders?: string[]
   rotationDue?: true
+  // The invite code, for admins to share; undefined when invites are off or it can't be read.
+  invite?: string
   company: Company
   members: Member[]
   projects: Project[]

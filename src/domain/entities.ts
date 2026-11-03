@@ -1,5 +1,7 @@
 import type { EventTemplate } from 'nostr-tools'
 import { seal, type OrgKey } from './crypto'
+import { sha256 } from '@noble/hashes/sha2.js'
+import { bytesToHex } from '@noble/hashes/utils.js'
 import { APP_TAG, KIND, type MemberRole } from './model'
 
 export type Address =
@@ -13,6 +15,9 @@ export interface CompanyContent {
   name: string
   // Who has been handed the current key (encrypted organizations only).
   holders?: string[]
+  // The secret code in the organization's invite link; its hash is a tag the relay checks join
+  // requests against (src/domain/requests.ts). None when invites are off.
+  invite?: string
 }
 export interface MemberContent {
   role: MemberRole
@@ -88,6 +93,7 @@ function accessTags(address: Address, content: Record<string, unknown>): string[
   if (address.type === 'project' && Array.isArray(content.members)) {
     for (const pk of content.members) if (typeof pk === 'string') tags.push(['p', pk])
   }
+  if (address.type === 'company' && typeof content.invite === 'string' && content.invite) tags.push(['invite', inviteHash(content.invite)])
   if (content.removed === true) tags.push(['removed'])
   return tags
 }
@@ -99,6 +105,9 @@ export function template<A extends Address>(address: A, content: Content<A>, cre
   if (!key) return { kind: KIND, created_at: createdAt, tags, content: JSON.stringify(content) }
   return { kind: KIND, created_at: createdAt, tags: [...tags, ['k', key.kid]], content: seal(content, d, key) }
 }
+
+// What the relay sees of an invite code.
+export const inviteHash = (code: string): string => bytesToHex(sha256(new TextEncoder().encode(code)))
 
 export function newId(): string {
   const bytes = crypto.getRandomValues(new Uint8Array(8))

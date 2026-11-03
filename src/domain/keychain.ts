@@ -252,7 +252,7 @@ export class Keychain {
     const key = this.keyFor(state)
     if (missing.length) {
       // Listed as holders first, so nobody ever holds the key without being listed.
-      const [{ address, content }] = commands.renameCompany(id, state.company.name, [...holders, ...missing])
+      const { address, content } = commands.companyWrite(state, { holders: [...holders, ...missing] })
       await this.publish(template(address, content as never, this.host.nextTimestamp(`canban:company:${id}`), key))
     }
     // Everyone this admin has listed for the current key gets an envelope from it; one that

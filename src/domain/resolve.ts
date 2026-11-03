@@ -208,7 +208,7 @@ function resolveCompany(companyId: string, ce: CompanyEvents, keyring?: Keyring)
   const projectOf = new Map(tasks.map((t) => [t.id, t.projectId]))
   for (const t of tasks) t.dependsOn = [...new Set(t.dependsOn)].filter((id) => id !== t.id && projectOf.get(id) === t.projectId)
 
-  return { locked: companyLocked, kid, kidAt: kid ? companyEvent.created_at : undefined, ...(kid ? { holders } : {}), ...(rotationDue ? { rotationDue: true as const } : {}), company: { id: companyId, owner, name: company.name }, members, projects, lanes, tasks }
+  return { locked: companyLocked, kid, kidAt: kid ? companyEvent.created_at : undefined, ...(kid ? { holders } : {}), ...(typeof read?.invite === 'string' && read.invite ? { invite: read.invite } : {}), ...(rotationDue ? { rotationDue: true as const } : {}), company: { id: companyId, owner, name: company.name }, members, projects, lanes, tasks }
 }
 
 function holdersOf(versions: Versions, kid: string, admins: Set<string>, keyring?: Keyring): string[] {

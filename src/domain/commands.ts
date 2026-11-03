@@ -1,4 +1,4 @@
-import { newId, type Address, type Content, type LaneContent, type TaskContent } from './entities'
+import { newId, type Address, type CompanyContent, type Content, type LaneContent, type TaskContent } from './entities'
 import { DEFAULT_LANES, MAX_TASK_BODY_BYTES, isAdmin, type CompanyState, type Lane, type MemberRole, type Project, type Task } from './model'
 
 // A project whose content can't be read must not be written to: it would overwrite encrypted data
@@ -26,10 +26,17 @@ export function createCompany(owner: string, name: string): { companyId: string;
   }
 }
 
-// An encrypted organization's company event also lists who holds its key (state.holders); a rename
-// must carry them, or later removals would not trigger a new key.
-export function renameCompany(companyId: string, name: string, holders?: string[]): Write[] {
-  return [write({ type: 'company', companyId }, { name, ...(holders ? { holders } : {}) })]
+// The company event also carries who holds the organization's key and its invite code; every
+// rewrite keeps them, or removals would not trigger a new key and invite links would stop working.
+export function companyWrite(state: CompanyState, patch: Partial<CompanyContent>): Write {
+  const content: CompanyContent = { name: state.company.name, holders: state.holders, invite: state.invite, ...patch }
+  if (!content.holders) delete content.holders
+  if (!content.invite) delete content.invite
+  return write({ type: 'company', companyId: state.company.id }, content)
+}
+
+export function renameCompany(state: CompanyState, name: string): Write[] {
+  return [companyWrite(state, { name })]
 }
 
 export function setMember(companyId: string, pubkey: string, role: MemberRole, name?: string): Write[] {
