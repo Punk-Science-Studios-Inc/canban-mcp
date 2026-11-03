@@ -45191,7 +45191,7 @@ function writeKey(state, keyrings) {
     return void 0;
   }
   const key = keyrings.keys.get(state.company.id)?.get(state.kid);
-  if (!key || seen && seen.at > (state.kidAt ?? 0)) throw new Error(NOT_YET);
+  if (!key || seen && seen.kid !== state.kid && seen.at > (state.kidAt ?? 0)) throw new Error(NOT_YET);
   return { kid: state.kid, key };
 }
 function noteCurrent(keyrings, state) {
@@ -45214,12 +45214,12 @@ function decode3(raw) {
   }
   return ring;
 }
-async function envelope(cipher, companyId, member, history, createdAt) {
+async function envelope(cipher, companyId, member, history, createdAt, kid) {
   return {
     kind: KIND,
     created_at: createdAt,
     // The p tag lets the member's subscription find it.
-    tags: [["d", envelopeD(companyId, member)], ["t", APP_TAG], ["c", companyId], ["p", member]],
+    tags: [["d", envelopeD(companyId, member)], ["t", APP_TAG], ["c", companyId], ["p", member], ["k", kid]],
     content: await cipher.encrypt(member, JSON.stringify(encode3(history)))
   };
 }
@@ -45227,8 +45227,9 @@ async function openEnvelope(cipher, event, state, me2) {
   const d = event.tags.find((t) => t[0] === "d")?.[1];
   if (event.kind !== KIND || d !== envelopeD(state.company.id, me2)) return /* @__PURE__ */ new Map();
   if (!isAdmin(state, event.pubkey)) return /* @__PURE__ */ new Map();
+  const text = await cipher.decrypt(event.pubkey, event.content);
   try {
-    return decode3(JSON.parse(await cipher.decrypt(event.pubkey, event.content)));
+    return decode3(JSON.parse(text));
   } catch {
     return /* @__PURE__ */ new Map();
   }
@@ -45249,8 +45250,9 @@ async function openKeyring(cipher, event, me2) {
   const keyrings = emptyKeyrings();
   const d = event.tags.find((t) => t[0] === "d")?.[1];
   if (event.kind !== KIND || event.pubkey !== me2 || d !== keyringD(me2)) return keyrings;
+  const text = await cipher.decrypt(me2, event.content);
   try {
-    const raw = JSON.parse(await cipher.decrypt(me2, event.content));
+    const raw = JSON.parse(text);
     for (const [companyId, ring] of Object.entries(raw.keys ?? {})) {
       const keys = decode3(ring);
       if (keys.size) keyrings.keys.set(companyId, keys);
@@ -45634,7 +45636,15 @@ function canWrite(state, project, pubkey) {
 
 // src/domain/keychain.ts
 var SYNC_MS = 300;
+var RETRY_MS = 15e3;
+var MAX_TRIES = 3;
 var ROTATE_DELAY_MS = [5e3, 3e4];
+var BUSY_RETRY_MS = 2e3;
+var Stopped = class extends Error {
+};
+var Refused = class extends Error {
+};
+var REFUSED_BACKOFF_MS = 2 * 6e4;
 var Keychain = class {
   constructor(host, pins) {
     this.host = host;
@@ -45642,9 +45652,14 @@ var Keychain = class {
   }
   host;
   keyrings = emptyKeyrings();
+  // Events read (or not worth reading), failed attempts at the others, and ones given up on.
   opened = /* @__PURE__ */ new Set();
+  tries = /* @__PURE__ */ new Map();
+  givenUp = /* @__PURE__ */ new Set();
+  // Organizations whose key duties the relay refused, until when.
+  backoff = /* @__PURE__ */ new Map();
   timer;
-  busy = false;
+  running;
   again = false;
   stopped = false;
   rotations = /* @__PURE__ */ new Map();
@@ -45655,147 +45670,242 @@ var Keychain = class {
     this.rotations.clear();
   }
   // Call whenever events arrive; passes are debounced.
-  schedule() {
+  schedule(delay = SYNC_MS) {
     if (this.stopped) return;
     clearTimeout(this.timer);
-    this.timer = setTimeout(() => void this.sync(), SYNC_MS);
+    this.timer = setTimeout(() => void this.sync(), delay);
   }
   // The key to encrypt a write to this organization with; throws when it can't be written yet.
   keyFor(state) {
     return writeKey(state, this.keyrings);
   }
-  // A new organization's key: held at once, so its first writes are encrypted with it.
-  adopt(companyId, key) {
-    merge2(this.keyrings, companyId, /* @__PURE__ */ new Map([[key.kid, key.key]]));
-    this.host.setKeys(flatten(this.keyrings));
-  }
-  // Puts a new organization's key in its owner's own envelope and keyring.
-  async share(companyId, key) {
+  // A new organization: its key is saved to the owner's keyring and envelope before anything is
+  // encrypted with it, so it can't be lost, then held for the first writes.
+  async adopt(companyId, key) {
     const cipher = this.host.cipher();
-    if (!cipher) return;
-    const me2 = this.host.me;
-    await this.publish(await envelope(cipher, companyId, me2, /* @__PURE__ */ new Map([[key.kid, key.key]]), this.host.nextTimestamp(envelopeD(companyId, me2))));
+    if (!cipher) throw new Error("This sign-in can\u2019t create encrypted organizations.");
+    await this.settled();
+    await this.readKeyrings(cipher);
+    merge2(this.keyrings, companyId, /* @__PURE__ */ new Map([[key.kid, key.key]]));
     await this.saveKeyring(cipher);
+    const me2 = this.host.me;
+    await this.publish(await envelope(cipher, companyId, me2, /* @__PURE__ */ new Map([[key.kid, key.key]]), this.host.nextTimestamp(envelopeD(companyId, me2)), key.kid));
+    this.setKeys();
   }
-  async sync() {
-    if (this.stopped) return;
-    if (this.busy) {
+  // Waits for any pass in progress, then runs one, so callers see every key that has arrived.
+  async settled() {
+    while (this.running) await this.running;
+    await this.sync();
+  }
+  sync() {
+    if (this.stopped) return Promise.resolve();
+    if (this.running) {
       this.again = true;
-      return;
+      return this.running;
     }
+    this.running = this.pass().finally(() => {
+      this.running = void 0;
+      if (this.again) {
+        this.again = false;
+        this.schedule();
+      }
+    });
+    return this.running;
+  }
+  async pass() {
     const companies = this.host.companies();
     if (!companies) return;
     if (![...companies.values()].some((s) => s.kid || s.locked)) return this.host.report("ok");
     const cipher = this.host.cipher();
     if (!cipher) return this.host.report("cant-decrypt");
-    this.busy = true;
     try {
-      await this.open(cipher, companies);
+      const failed = await this.open(cipher, companies);
+      this.check();
+      if (failed) {
+        this.host.report("failed", failed);
+        this.schedule(RETRY_MS);
+        return;
+      }
       this.host.report("ok");
       await this.duties(cipher, this.host.companies() ?? companies);
     } catch (error62) {
-      this.host.report("failed", error62);
-    } finally {
-      this.busy = false;
-      if (this.again) {
-        this.again = false;
-        this.schedule();
-      }
+      if (error62 instanceof Stopped) return;
+      this.host.report(error62 instanceof Refused ? "ok" : "failed", error62);
+      this.schedule(RETRY_MS);
     }
   }
-  // Reads the keyring, then any envelope for a key still missing.
+  // Reads every copy of the keyring; throws if one can't be read, so nothing ever saves over it.
+  async readKeyrings(cipher) {
+    let changed = false;
+    for (const event of this.host.versions(keyringD(this.host.me))) {
+      if (this.givenUp.has(event.id)) throw new Error("Your saved keys could not be read this session.");
+      if (this.opened.has(event.id)) continue;
+      changed = mergeKeyrings(this.keyrings, await this.attempt(event.id, () => openKeyring(cipher, event, this.host.me))) || changed;
+      this.opened.add(event.id);
+    }
+    return changed;
+  }
+  // Reads the keyring, then any envelope for a key still missing. Returns the first signer failure,
+  // if any; the rest still goes ahead.
   async open(cipher, companies) {
     const me2 = this.host.me;
+    let failed;
     let changed = false;
-    let save = false;
-    for (const event of this.host.versions(keyringD(me2))) {
-      if (this.opened.has(event.id)) continue;
-      this.opened.add(event.id);
-      changed = mergeKeyrings(this.keyrings, await openKeyring(cipher, event, me2)) || changed;
+    let keyringRead = true;
+    try {
+      changed = await this.readKeyrings(cipher);
+    } catch (error62) {
+      if (error62 instanceof Stopped) throw error62;
+      failed = error62;
+      keyringRead = false;
     }
+    let found = false;
     for (const state of companies.values()) {
       const id = state.company.id;
       if (!state.kid || this.keyrings.keys.get(id)?.has(state.kid)) continue;
       for (const event of this.host.versions(envelopeD(id, me2))) {
-        if (this.opened.has(event.id)) continue;
-        const keys = await openEnvelope(cipher, event, state, me2);
-        if (keys.size || isAdmin(state, event.pubkey)) this.opened.add(event.id);
-        if (merge2(this.keyrings, id, keys)) changed = save = true;
+        if (this.opened.has(event.id) || this.givenUp.has(event.id)) continue;
+        try {
+          const keys = await this.attempt(event.id, () => openEnvelope(cipher, event, state, me2));
+          if (keys.size || isAdmin(state, event.pubkey)) this.opened.add(event.id);
+          if (merge2(this.keyrings, id, keys)) changed = found = true;
+        } catch (error62) {
+          if (error62 instanceof Stopped) throw error62;
+          failed ??= error62;
+        }
       }
     }
     let pinned = false;
     for (const state of companies.values()) pinned = noteCurrent(this.keyrings, state) || pinned;
     if (pinned) this.host.savePins?.(this.keyrings.current);
-    if (changed) this.host.setKeys(flatten(this.keyrings));
-    if (save) await this.saveKeyring(cipher);
+    if (changed) this.setKeys();
+    if (found && keyringRead) await this.saveKeyring(cipher);
+    return failed;
+  }
+  // Runs one decrypt, counting failures; after too many the event is skipped for the session.
+  async attempt(id, run) {
+    try {
+      const result = await run();
+      this.check();
+      return result;
+    } catch (error62) {
+      this.check();
+      const tries = (this.tries.get(id) ?? 0) + 1;
+      this.tries.set(id, tries);
+      if (tries >= MAX_TRIES) this.givenUp.add(id);
+      throw error62;
+    }
   }
   // What an admin's client does unasked: hand the key to new members, replace it after a removal.
   async duties(cipher, companies) {
-    const me2 = this.host.me;
     for (const state of companies.values()) {
       const id = state.company.id;
-      if (!state.kid || state.locked || !isAdmin(state, me2) || !this.keyrings.keys.get(id)?.has(state.kid)) continue;
-      if (state.rotationDue) {
-        this.planRotation(state);
-        continue;
+      if ((this.backoff.get(id) ?? 0) > Date.now()) continue;
+      try {
+        await this.duty(cipher, state);
+      } catch (error62) {
+        if (!(error62 instanceof Refused)) throw error62;
+        this.backoff.set(id, Date.now() + REFUSED_BACKOFF_MS);
       }
-      const holders = state.holders ?? [];
-      const missing = state.members.map((m) => m.pubkey).filter((pk) => !holders.includes(pk));
-      if (!missing.length) continue;
-      const [{ address, content }] = renameCompany(id, state.company.name, [...holders, ...missing]);
-      await this.publish(template(address, content, this.host.nextTimestamp(`canban:company:${id}`), this.keyFor(state)));
-      const history = this.keyrings.keys.get(id);
-      for (const pk of missing) await this.publish(await envelope(cipher, id, pk, history, this.host.nextTimestamp(envelopeD(id, pk))));
     }
   }
-  planRotation(state) {
+  async duty(cipher, state) {
+    const me2 = this.host.me;
+    const id = state.company.id;
+    if (!state.kid || state.locked || !isAdmin(state, me2) || !this.keyrings.keys.get(id)?.has(state.kid)) return;
+    if (state.rotationDue) return this.planRotation(state);
+    const holders = state.holders ?? [];
+    const missing = state.members.map((m) => m.pubkey).filter((pk) => !holders.includes(pk));
+    const key = this.keyFor(state);
+    if (missing.length) {
+      const [{ address, content }] = renameCompany(id, state.company.name, [...holders, ...missing]);
+      await this.publish(template(address, content, this.host.nextTimestamp(`canban:company:${id}`), key));
+    }
+    const history = this.keyrings.keys.get(id);
+    for (const pk of /* @__PURE__ */ new Set([...this.listedByMe(id, state.kid), ...missing])) {
+      if (this.sentTo(id, pk, state.kid)) continue;
+      await this.publish(await envelope(cipher, id, pk, history, this.host.nextTimestamp(envelopeD(id, pk)), state.kid));
+    }
+  }
+  // The holders named by this admin's own newest company event for the key.
+  listedByMe(companyId, kid) {
+    const mine = this.host.versions(`canban:company:${companyId}`).filter((e) => e.pubkey === this.host.me && kidTag(e) === kid).sort((a, b) => b.created_at - a.created_at)[0];
+    const holders = open2(mine, flatten(this.keyrings))?.holders;
+    return Array.isArray(holders) ? holders.filter((pk) => typeof pk === "string") : [];
+  }
+  // Whether this admin has already sent `pk` an envelope carrying the key.
+  sentTo(companyId, pk, kid) {
+    return this.host.versions(envelopeD(companyId, pk)).some((e) => e.pubkey === this.host.me && kidTag(e) === kid);
+  }
+  planRotation(state, delay) {
     const id = state.company.id;
     if (this.rotations.has(id)) return;
     const [min, max] = ROTATE_DELAY_MS;
-    const delay = state.company.owner === this.host.me ? 0 : min + Math.random() * (max - min);
+    const wait = delay ?? (state.company.owner === this.host.me ? 0 : min + Math.random() * (max - min));
     this.rotations.set(
       id,
       setTimeout(() => {
         this.rotations.delete(id);
         void this.rotate(id);
-      }, delay)
+      }, wait)
     );
   }
   async rotate(companyId) {
     const state = this.host.companies()?.get(companyId);
     const cipher = this.host.cipher();
     if (this.stopped || !state?.rotationDue || !cipher) return;
-    if (this.busy) return this.planRotation(state);
-    this.busy = true;
-    try {
+    if (this.running) return this.planRotation(state, BUSY_RETRY_MS);
+    const run = (async () => {
       const r = rotation(state, this.keyrings, this.host.me);
+      await this.readKeyrings(cipher);
       merge2(this.keyrings, companyId, r.history);
-      this.host.setKeys(flatten(this.keyrings));
       await this.saveKeyring(cipher);
+      this.setKeys();
       const { address, content } = r.company;
       await this.publish(template(address, content, this.host.nextTimestampIn(companyId), r.key));
-      for (const pk of r.recipients) await this.publish(await envelope(cipher, companyId, pk, r.history, this.host.nextTimestamp(envelopeD(companyId, pk))));
-    } catch (error62) {
-      this.host.report("failed", error62);
-    } finally {
-      this.busy = false;
+      for (const pk of r.recipients) await this.publish(await envelope(cipher, companyId, pk, r.history, this.host.nextTimestamp(envelopeD(companyId, pk)), r.key.kid));
+    })();
+    this.running = run.catch((error62) => {
+      if (error62 instanceof Refused) this.backoff.set(companyId, Date.now() + REFUSED_BACKOFF_MS);
+      else if (!(error62 instanceof Stopped)) this.host.report("failed", error62);
+    }).finally(() => {
+      this.running = void 0;
       this.schedule();
-    }
+    });
+    await this.running;
+  }
+  setKeys() {
+    this.check();
+    this.host.setKeys(flatten(this.keyrings));
   }
   async saveKeyring(cipher) {
     const me2 = this.host.me;
-    const event = await this.host.sign(await keyring(cipher, me2, this.keyrings, this.host.nextTimestamp(keyringD(me2))));
+    const unsigned = await keyring(cipher, me2, this.keyrings, this.host.nextTimestamp(keyringD(me2)));
+    this.check();
+    const event = await this.host.sign(unsigned);
+    this.check();
     this.opened.add(event.id);
     await this.host.send(event);
   }
   async publish(unsigned) {
-    await this.host.send(await this.host.sign(unsigned));
+    this.check();
+    const event = await this.host.sign(unsigned);
+    this.check();
+    try {
+      await this.host.send(event);
+    } catch (error62) {
+      throw new Refused(error62 instanceof Error ? error62.message : String(error62));
+    }
+  }
+  // Work still in flight when the person signs out must not touch the next session.
+  check() {
+    if (this.stopped) throw new Stopped();
   }
 };
 
 // src/board.ts
 var READY_TIMEOUT = 1e4;
-var RETRY_MS = 3e3;
+var RETRY_MS2 = 3e3;
 var RESUBSCRIBE_MS = 400;
 var STALE_MS = 3e4;
 useWebSocketImplementation(wrapper_default);
@@ -45817,7 +45927,8 @@ var Board = class {
         decrypt: async (peer, text) => v2.decrypt(text, conversation(peer))
       }),
       sign: async (unsigned) => finalizeEvent2(unsigned, this.secret),
-      send: (event) => this.send(event),
+      // Kept only once the relay accepts it, so a refused key change is never taken as current.
+      send: (event) => this.send(event, false),
       nextTimestamp: (d) => this.nextTimestamp(d),
       nextTimestampIn: (companyId) => {
         let newest = 0;
@@ -45827,6 +45938,7 @@ var Board = class {
       setKeys: (keys) => this.keys = keys,
       report: (outcome, error62) => {
         if (outcome === "failed") this.lastError = `Organization keys: ${error62 instanceof Error ? error62.message : String(error62)}`;
+        else if (this.lastError.startsWith("Organization keys:")) this.lastError = "";
       }
     });
   }
@@ -45886,7 +45998,7 @@ var Board = class {
         this.lastError = reason;
         this.connection = /restricted|auth-required/i.test(reason) ? "denied" : "offline";
         this.markLoaded();
-        setTimeout(() => !this.closed && this.start(), this.connection === "denied" ? RETRY_MS * 5 : RETRY_MS);
+        setTimeout(() => !this.closed && this.start(), this.connection === "denied" ? RETRY_MS2 * 5 : RETRY_MS2);
       }
     });
   }
@@ -45904,7 +46016,7 @@ var Board = class {
       this.start();
     }
     if (!this.loaded) await Promise.race([new Promise((r) => this.waiters.push(r)), new Promise((r) => setTimeout(r, READY_TIMEOUT))]);
-    await this.keychain.sync();
+    await this.keychain.settled();
   }
   companies() {
     return resolve(this.events.values(), this.keys);
@@ -45929,12 +46041,14 @@ var Board = class {
   nextTimestamp(d) {
     return Math.max(Math.floor(Date.now() / 1e3), (this.newestByD.get(d) ?? 0) + 1);
   }
-  async send(event) {
-    this.add(event);
+  // Optimistic writes show at once; the keychain's are kept only once accepted.
+  async send(event, optimistic = true) {
+    if (optimistic) this.add(event);
     await Promise.any(this.pool.publish([this.relay], event, { onauth: async (e) => finalizeEvent2(e, this.secret) })).catch((error62) => {
       const reason = error62 instanceof AggregateError ? error62.errors[0] : error62;
       throw new Error(`The relay refused the write: ${reason instanceof Error ? reason.message : String(reason)}`);
     });
+    if (!optimistic) this.add(event);
   }
   async names(pubkeys) {
     const missing = pubkeys.filter((pk) => !this.profiles.has(pk));

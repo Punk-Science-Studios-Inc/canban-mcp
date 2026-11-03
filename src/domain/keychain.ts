@@ -56,12 +56,18 @@ const ROTATE_DELAY_MS = [5_000, 30_000]
 const BUSY_RETRY_MS = 2_000
 
 class Stopped extends Error {}
+// The relay refused a write: not the signer's fault, and retried only after REFUSED_BACKOFF_MS.
+class Refused extends Error {}
+const REFUSED_BACKOFF_MS = 2 * 60_000
 
 export class Keychain {
   private keyrings: Keyrings = emptyKeyrings()
-  // Events read (or not worth reading), and failed attempts at the others.
+  // Events read (or not worth reading), failed attempts at the others, and ones given up on.
   private opened = new Set<string>()
   private tries = new Map<string, number>()
+  private givenUp = new Set<string>()
+  // Organizations whose key duties the relay refused, until when.
+  private backoff = new Map<string, number>()
   private timer?: ReturnType<typeof setTimeout>
   private running?: Promise<void>
   private again = false
@@ -148,15 +154,17 @@ export class Keychain {
       await this.duties(cipher, this.host.companies() ?? companies)
     } catch (error) {
       if (error instanceof Stopped) return
-      this.host.report('failed', error)
+      // A refused keyring save isn't the signer's fault: no phone message.
+      this.host.report(error instanceof Refused ? 'ok' : 'failed', error)
       this.schedule(RETRY_MS)
     }
   }
 
-  // Reads every copy of the keyring; throws if one can't be read yet, so nothing saves over it.
+  // Reads every copy of the keyring; throws if one can't be read, so nothing ever saves over it.
   private async readKeyrings(cipher: Cipher): Promise<boolean> {
     let changed = false
     for (const event of this.host.versions(keyringD(this.host.me))) {
+      if (this.givenUp.has(event.id)) throw new Error('Your saved keys could not be read this session.')
       if (this.opened.has(event.id)) continue
       changed = mergeKeyrings(this.keyrings, await this.attempt(event.id, () => openKeyring(cipher, event, this.host.me))) || changed
       this.opened.add(event.id)
@@ -183,7 +191,7 @@ export class Keychain {
       const id = state.company.id
       if (!state.kid || this.keyrings.keys.get(id)?.has(state.kid)) continue
       for (const event of this.host.versions(envelopeD(id, me))) {
-        if (this.opened.has(event.id)) continue
+        if (this.opened.has(event.id) || this.givenUp.has(event.id)) continue
         try {
           const keys = await this.attempt(event.id, () => openEnvelope(cipher, event, state, me))
           // An envelope from someone not (yet) an admin is tried again later.
@@ -214,36 +222,45 @@ export class Keychain {
       this.check()
       const tries = (this.tries.get(id) ?? 0) + 1
       this.tries.set(id, tries)
-      if (tries >= MAX_TRIES) this.opened.add(id)
+      if (tries >= MAX_TRIES) this.givenUp.add(id)
       throw error
     }
   }
 
   // What an admin's client does unasked: hand the key to new members, replace it after a removal.
   private async duties(cipher: Cipher, companies: Map<string, CompanyState>): Promise<void> {
-    const me = this.host.me
     for (const state of companies.values()) {
       const id = state.company.id
-      if (!state.kid || state.locked || !isAdmin(state, me) || !this.keyrings.keys.get(id)?.has(state.kid)) continue
-      if (state.rotationDue) {
-        this.planRotation(state)
-        continue
+      if ((this.backoff.get(id) ?? 0) > Date.now()) continue
+      try {
+        await this.duty(cipher, state)
+      } catch (error) {
+        if (!(error instanceof Refused)) throw error
+        // Each organization's duties stand alone; one the relay refuses waits, the rest go ahead.
+        this.backoff.set(id, Date.now() + REFUSED_BACKOFF_MS)
       }
-      const holders = state.holders ?? []
-      const missing = state.members.map((m) => m.pubkey).filter((pk) => !holders.includes(pk))
-      const key = this.keyFor(state)
-      if (missing.length) {
-        // Listed as holders first, so nobody ever holds the key without being listed.
-        const [{ address, content }] = commands.renameCompany(id, state.company.name, [...holders, ...missing])
-        await this.publish(template(address, content as never, this.host.nextTimestamp(`canban:company:${id}`), key))
-      }
-      // Everyone this admin has listed for the current key gets an envelope from it; one that
-      // failed to send before is sent again.
-      const history = this.keyrings.keys.get(id)!
-      for (const pk of new Set([...this.listedByMe(id, state.kid), ...missing])) {
-        if (this.sentTo(id, pk, state.kid)) continue
-        await this.publish(await envelope(cipher, id, pk, history, this.host.nextTimestamp(envelopeD(id, pk)), state.kid))
-      }
+    }
+  }
+
+  private async duty(cipher: Cipher, state: CompanyState): Promise<void> {
+    const me = this.host.me
+    const id = state.company.id
+    if (!state.kid || state.locked || !isAdmin(state, me) || !this.keyrings.keys.get(id)?.has(state.kid)) return
+    if (state.rotationDue) return this.planRotation(state)
+    const holders = state.holders ?? []
+    const missing = state.members.map((m) => m.pubkey).filter((pk) => !holders.includes(pk))
+    const key = this.keyFor(state)
+    if (missing.length) {
+      // Listed as holders first, so nobody ever holds the key without being listed.
+      const [{ address, content }] = commands.renameCompany(id, state.company.name, [...holders, ...missing])
+      await this.publish(template(address, content as never, this.host.nextTimestamp(`canban:company:${id}`), key))
+    }
+    // Everyone this admin has listed for the current key gets an envelope from it; one that
+    // failed to send before is sent again.
+    const history = this.keyrings.keys.get(id)!
+    for (const pk of new Set([...this.listedByMe(id, state.kid), ...missing])) {
+      if (this.sentTo(id, pk, state.kid)) continue
+      await this.publish(await envelope(cipher, id, pk, history, this.host.nextTimestamp(envelopeD(id, pk)), state.kid))
     }
   }
 
@@ -296,7 +313,8 @@ export class Keychain {
     })()
     this.running = run
       .catch((error) => {
-        if (!(error instanceof Stopped)) this.host.report('failed', error)
+        if (error instanceof Refused) this.backoff.set(companyId, Date.now() + REFUSED_BACKOFF_MS)
+        else if (!(error instanceof Stopped)) this.host.report('failed', error)
       })
       .finally(() => {
         this.running = undefined
@@ -324,7 +342,11 @@ export class Keychain {
     this.check()
     const event = await this.host.sign(unsigned)
     this.check()
-    await this.host.send(event)
+    try {
+      await this.host.send(event)
+    } catch (error) {
+      throw new Refused(error instanceof Error ? error.message : String(error))
+    }
   }
 
   // Work still in flight when the person signs out must not touch the next session.

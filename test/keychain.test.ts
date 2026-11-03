@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { finalizeEvent, generateSecretKey, getPublicKey, type EventTemplate, type NostrEvent } from 'nostr-tools'
 import * as nip44 from 'nostr-tools/nip44'
 import * as commands from '../src/domain/commands'
@@ -20,8 +20,8 @@ class Relay {
 
 let clock = 1000
 
-function client(relay: Relay, refuse?: (e: NostrEvent) => boolean) {
-  const sk = generateSecretKey()
+function client(relay: Relay, refuse?: (e: NostrEvent) => boolean, secret?: Uint8Array, refuseDecrypt?: () => boolean) {
+  const sk = secret ?? generateSecretKey()
   const me = getPublicKey(sk)
   const failures: unknown[] = []
   let keys: Keyring = new Map()
@@ -32,7 +32,10 @@ function client(relay: Relay, refuse?: (e: NostrEvent) => boolean) {
     versions: (d) => relay.events.filter((e) => e.tags.some((t) => t[0] === 'd' && t[1] === d)),
     cipher: () => ({
       encrypt: async (peer, text) => nip44.v2.encrypt(text, nip44.v2.utils.getConversationKey(sk, peer)),
-      decrypt: async (peer, text) => nip44.v2.decrypt(text, nip44.v2.utils.getConversationKey(sk, peer)),
+      decrypt: async (peer, text) => {
+        if (refuseDecrypt?.()) throw new Error('refused')
+        return nip44.v2.decrypt(text, nip44.v2.utils.getConversationKey(sk, peer))
+      },
     }),
     sign: async (t: EventTemplate) => finalizeEvent(t, sk),
     send: async (e) => {
@@ -110,7 +113,11 @@ describe('keychain', () => {
     expect(bob.companies().get(companyId)!.locked).toBe(true)
 
     refuseEnvelopes = false
+    // A refused organization waits a couple of minutes before its duties are tried again.
+    const later = Date.now() + 3 * 60_000
+    vi.spyOn(Date, 'now').mockReturnValue(later)
     await alice.chain.sync()
+    vi.restoreAllMocks()
     await bob.chain.sync()
     expect(bob.companies().get(companyId)!.company.name).toBe('Hidden Co')
     alice.chain.stop()
@@ -135,5 +142,21 @@ describe('keychain', () => {
     alice.chain.stop()
     bob.chain.stop()
     carol.chain.stop()
+  })
+
+  it('never saves over a keyring it could not read', async () => {
+    const relay = new Relay()
+    const alice = client(relay)
+    await organization(relay, alice)
+    const saved = () => relay.events.find((e) => e.pubkey === alice.me && e.tags.some((t) => t[0] === 'd' && t[1].startsWith('canban:keyring:')))!
+    const before = saved().id
+
+    // A second device whose signer refuses every decrypt.
+    const phone = client(relay, undefined, alice.sk, () => true)
+    for (let i = 0; i < 4; i++) await phone.chain.sync()
+    await expect(phone.chain.adopt(`${alice.me}.second`, newOrgKey())).rejects.toThrow()
+    expect(saved().id).toBe(before)
+    alice.chain.stop()
+    phone.chain.stop()
   })
 })
