@@ -57,7 +57,7 @@ beforeAll(async () => {
   }
   await publish([
     ...writes.map(({ address, content }) => template(address, content as never, clock++, key)),
-    await envelope(ownerCipher, company.companyId, agent.pubkey, new Map([[key.kid, key.key]]), clock++),
+    await envelope(ownerCipher, company.companyId, agent.pubkey, new Map([[key.kid, key.key]]), clock++, key.kid),
   ])
 
   board = new Board(relay.url, agentKey, [])
