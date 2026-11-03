@@ -45289,6 +45289,7 @@ function canWrite(state, project, pubkey) {
 var emptyKeyrings = () => ({ keys: /* @__PURE__ */ new Map(), current: /* @__PURE__ */ new Map() });
 var envelopeD = (companyId, member) => `canban:key:${companyId}:${member}`;
 var keyringD = (pubkey) => `canban:keyring:${pubkey}`;
+var envelopeKids = (event) => event.tags.filter((t) => (t[0] === "k" || t[0] === "h") && t[1]).map((t) => t[1]);
 function newOrgKey() {
   return orgKey(crypto.getRandomValues(new Uint8Array(32)));
 }
@@ -45334,7 +45335,9 @@ async function envelope(cipher, companyId, member, history, createdAt, kid) {
     kind: KIND,
     created_at: createdAt,
     // The p tag lets the member's subscription find it.
-    tags: [["d", envelopeD(companyId, member)], ["t", APP_TAG], ["c", companyId], ["p", member], ["k", kid]],
+    // h names every other key it carries, so the writer (and the relay's purge) can tell whether it
+    // hands out the whole history.
+    tags: [["d", envelopeD(companyId, member)], ["t", APP_TAG], ["c", companyId], ["p", member], ["k", kid], ...[...history.keys()].filter((h) => h !== kid).map((h) => ["h", h])],
     content: await cipher.encrypt(member, JSON.stringify(encode3(history)))
   };
 }
@@ -45404,9 +45407,8 @@ function merge2(keyrings, companyId, keys) {
 function recipients(state) {
   return [.../* @__PURE__ */ new Set([ownerOf(state.company.id), ...state.members.map((m) => m.pubkey)])];
 }
-function rotation(state, keyrings, me2) {
+function rotation(state, keyrings, me2, key = newOrgKey()) {
   if (state.locked || !isAdmin(state, me2)) throw new Error(NOT_YET);
-  const key = newOrgKey();
   const history = new Map(keyrings.keys.get(state.company.id) ?? []);
   history.set(key.kid, key.key);
   const people = recipients(state);
@@ -45415,6 +45417,45 @@ function rotation(state, keyrings, me2) {
 
 // src/domain/profile.ts
 var profileD = (pubkey) => `canban:profile:${pubkey}`;
+var orgProfileD = (companyId, pubkey) => `canban:profile:${companyId}:${pubkey}`;
+function profileTemplate(pubkey, profile, createdAt, org) {
+  if (!org) return { kind: KIND, created_at: createdAt, tags: [["d", profileD(pubkey)], ["t", APP_TAG]], content: JSON.stringify(profile) };
+  const d = orgProfileD(org.companyId, pubkey);
+  return { kind: KIND, created_at: createdAt, tags: [["d", d], ["t", APP_TAG], ["c", org.companyId], ["k", org.key.kid]], content: seal(profile, d, org.key) };
+}
+function movedTemplate(pubkey, createdAt) {
+  return { kind: KIND, created_at: createdAt, tags: [["d", profileD(pubkey)], ["t", APP_TAG]], content: JSON.stringify({ moved: true }) };
+}
+var MAX_PICTURE = 24e3;
+function safePicture(picture) {
+  if (typeof picture !== "string" || picture.length > MAX_PICTURE) return void 0;
+  return /^data:image\/(png|jpeg|webp);base64,[A-Za-z0-9+/=]+$/.test(picture) ? picture : void 0;
+}
+function isOwnProfile(e) {
+  if (e.kind !== KIND) return false;
+  const d = e.tags.find((t) => t[0] === "d")?.[1] ?? "";
+  if (d === profileD(e.pubkey)) return true;
+  const [app, type, companyId, pubkey, extra] = d.split(":");
+  return app === "canban" && type === "profile" && !!companyId && pubkey === e.pubkey && extra === void 0 && isEncrypted(e);
+}
+function read(e, keyring2) {
+  const raw = open2(e, keyring2);
+  if (!raw || typeof raw !== "object" || raw.moved) return void 0;
+  const name = typeof raw.name === "string" && raw.name.trim() ? raw.name.trim().slice(0, 60) : void 0;
+  return { name, picture: safePicture(raw.picture) };
+}
+function profilesOf(events, keyring2) {
+  const newest = /* @__PURE__ */ new Map();
+  for (const e of events) {
+    if (!isOwnProfile(e)) continue;
+    const seen = newest.get(e.pubkey);
+    if (seen && seen.at >= e.created_at) continue;
+    const profile = read(e, keyring2);
+    if (profile) newest.set(e.pubkey, { at: e.created_at, profile });
+  }
+  return new Map([...newest].map(([pubkey, { profile }]) => [pubkey, profile]));
+}
+var sameProfile = (a, b) => (a.name ?? "") === (b.name ?? "") && (a.picture ?? "") === (b.picture ?? "");
 
 // src/domain/subscription.ts
 function canbanFilters(me2, companyIds, people) {
@@ -45515,11 +45556,11 @@ var ROLES = ["admin", "member", "removed"];
 var validRole = (role) => ROLES.includes(role) ? role : void 0;
 function memberEntry(event, keyring2) {
   if (!event) return void 0;
-  const read = open2(event, keyring2);
+  const read2 = open2(event, keyring2);
   const roleTag = tag(event, "role");
-  const role = validRole(roleTag ? roleTag[1] : isEncrypted(event) ? void 0 : read?.role);
+  const role = validRole(roleTag ? roleTag[1] : isEncrypted(event) ? void 0 : read2?.role);
   const untagged = !event.tags.some((t) => t[0] === "p" && t[1]) || void 0;
-  return role ? { role, name: typeof read?.name === "string" ? read.name : void 0, untagged } : void 0;
+  return role ? { role, name: typeof read2?.name === "string" ? read2.name : void 0, untagged } : void 0;
 }
 var hasAccessTags = (event) => isEncrypted(event) || event.tags.some((t) => t[0] === "role" || t[0] === "removed" || t[0] === "p" && !!t[1]);
 function resolveCompany(companyId, ce, keyring2) {
@@ -45541,9 +45582,9 @@ function resolveCompany(companyId, ce, keyring2) {
     (pk) => admins.has(pk)
   );
   const companyEvent = encrypted ?? ownerEvent;
-  const read = companyEvent === ownerEvent ? ownerRead : open2(companyEvent, keyring2);
-  const company = { name: read?.name ?? "" };
-  const companyLocked = !read;
+  const read2 = companyEvent === ownerEvent ? ownerRead : open2(companyEvent, keyring2);
+  const company = { name: read2?.name ?? "" };
+  const companyLocked = !read2;
   const kid = kidTag(companyEvent) || void 0;
   const holders = kid ? holdersOf(ce.company, kid, admins, keyring2) : [];
   const departed = holders.filter((pk) => !memberSet.has(pk));
@@ -45561,8 +45602,8 @@ function resolveCompany(companyId, ce, keyring2) {
     const assigned = listed.filter((pk) => memberSet.has(pk));
     const project = { id: projectId, companyId, name: p?.name ?? "", members: assigned, nextNumber: 0, locked: !p };
     projects.push(project);
-    const writers = /* @__PURE__ */ new Set([...admins, ...assigned]);
-    const allowed = (pk) => writers.has(pk);
+    const writers2 = /* @__PURE__ */ new Set([...admins, ...assigned]);
+    const allowed = (pk) => writers2.has(pk);
     const projectLanes = [];
     for (const [laneId, lv] of ce.lanes.get(projectId) ?? []) {
       const laneEvent = latest(lv, allowed);
@@ -45604,7 +45645,7 @@ function resolveCompany(companyId, ce, keyring2) {
   tasks.sort(byOrder);
   const projectOf2 = new Map(tasks.map((t) => [t.id, t.projectId]));
   for (const t of tasks) t.dependsOn = [...new Set(t.dependsOn)].filter((id) => id !== t.id && projectOf2.get(id) === t.projectId);
-  return { locked: companyLocked, kid, kidAt: kid ? companyEvent.created_at : void 0, ...kid ? { holders } : {}, ...typeof read?.invite === "string" && read.invite ? { invite: read.invite } : {}, ...rotationDue ? { rotationDue: true } : {}, company: { id: companyId, owner, name: company.name }, members: members2, projects, lanes, tasks };
+  return { locked: companyLocked, kid, kidAt: kid ? companyEvent.created_at : void 0, ...kid ? { holders } : {}, ...typeof read2?.invite === "string" && read2.invite ? { invite: read2.invite } : {}, ...rotationDue ? { rotationDue: true } : {}, company: { id: companyId, owner, name: company.name }, members: members2, projects, lanes, tasks };
 }
 function holdersOf(versions, kid, admins, keyring2) {
   const holders = /* @__PURE__ */ new Set();
@@ -45637,12 +45678,64 @@ function byOrder(a, b) {
   return a.order - b.order || a.id.localeCompare(b.id);
 }
 
+// src/domain/migration.ts
+function reencryptions(state, events, me2) {
+  const companyId = state.company.id;
+  const admins = new Set(state.members.filter((m) => m.role !== "member").map((m) => m.pubkey));
+  const assigned = new Map(state.projects.map((p) => [p.id, new Set(p.members)]));
+  const byD = /* @__PURE__ */ new Map();
+  for (const event of events) {
+    if (event.kind !== KIND) continue;
+    const d = event.tags.find((t) => t[0] === "d")?.[1] ?? "";
+    const address = parseD(d);
+    if (!address || address.companyId !== companyId) continue;
+    const entry = byD.get(d) ?? { address, versions: [] };
+    entry.versions.push(event);
+    byD.set(d, entry);
+  }
+  const writes = [];
+  for (const { address, versions } of byD.values()) {
+    const allowed = writers(address, state.company.owner, admins, assigned);
+    if (!allowed(me2)) continue;
+    const event = latest(versions, allowed);
+    if (!event || isEncrypted(event)) continue;
+    if (address.type === "company") {
+      writes.push({ at: event.created_at, write: companyWrite(state, {}) });
+      continue;
+    }
+    let content;
+    try {
+      content = JSON.parse(event.content);
+    } catch {
+      continue;
+    }
+    if (content && typeof content === "object") writes.push({ at: event.created_at, write: { address, content } });
+  }
+  return writes.sort((a, b) => a.at - b.at).map((w) => w.write);
+}
+function writers(address, owner, admins, assigned) {
+  switch (address.type) {
+    case "company":
+      return (pk) => pk === owner;
+    case "member":
+      return address.pubkey === owner ? (pk) => pk === owner : (pk) => admins.has(pk) && pk !== address.pubkey;
+    case "lane":
+    case "task":
+      return (pk) => admins.has(pk) || !!assigned.get(address.projectId)?.has(pk);
+    default:
+      return (pk) => admins.has(pk);
+  }
+}
+
 // src/domain/keychain.ts
 var SYNC_MS = 300;
 var RETRY_MS = 15e3;
 var MAX_TRIES = 3;
 var ROTATE_DELAY_MS = [5e3, 3e4];
 var BUSY_RETRY_MS = 2e3;
+var FIRST_KEY_SPREAD_MS = 5e3;
+var REENCRYPT_BATCH = 30;
+var REENCRYPT_PAUSE_MS = 3e4;
 var Stopped = class extends Error {
 };
 var Refused = class extends Error {
@@ -45666,6 +45759,9 @@ var Keychain = class {
   again = false;
   stopped = false;
   rotations = /* @__PURE__ */ new Map();
+  // Organizations being re-encrypted, and when the next batch may go.
+  reencrypting = /* @__PURE__ */ new Map();
+  keyringStale = false;
   stop() {
     this.stopped = true;
     clearTimeout(this.timer);
@@ -45718,9 +45814,10 @@ var Keychain = class {
   async pass() {
     const companies = this.host.companies();
     if (!companies) return;
-    if (![...companies.values()].some((s) => s.kid || s.locked)) return this.host.report("ok");
+    const encrypted = [...companies.values()].some((s) => s.kid || s.locked);
+    if (!encrypted && ![...companies.values()].some((s) => this.unencrypted(s))) return this.host.report("ok");
     const cipher = this.host.cipher();
-    if (!cipher) return this.host.report("cant-decrypt");
+    if (!cipher) return this.host.report(encrypted ? "cant-decrypt" : "ok");
     try {
       const failed = await this.open(cipher, companies);
       this.check();
@@ -45731,6 +45828,7 @@ var Keychain = class {
       }
       this.host.report("ok");
       await this.duties(cipher, this.host.companies() ?? companies);
+      await this.profiles(this.host.companies() ?? companies);
     } catch (error62) {
       if (error62 instanceof Stopped) return;
       this.host.report(error62 instanceof Refused ? "ok" : "failed", error62);
@@ -45743,7 +45841,9 @@ var Keychain = class {
     for (const event of this.host.versions(keyringD(this.host.me))) {
       if (this.givenUp.has(event.id)) throw new Error("Your saved keys could not be read this session.");
       if (this.opened.has(event.id)) continue;
-      changed = mergeKeyrings(this.keyrings, await this.attempt(event.id, () => openKeyring(cipher, event, this.host.me))) || changed;
+      const copy = await this.attempt(event.id, () => openKeyring(cipher, event, this.host.me));
+      if (lacks(copy, this.keyrings)) this.keyringStale = true;
+      changed = mergeKeyrings(this.keyrings, copy) || changed;
       this.opened.add(event.id);
     }
     return changed;
@@ -45765,7 +45865,9 @@ var Keychain = class {
     let found = false;
     for (const state of companies.values()) {
       const id = state.company.id;
-      if (!state.kid || this.keyrings.keys.get(id)?.has(state.kid)) continue;
+      const held = this.keyrings.keys.get(id);
+      const missing = (kid) => !!kid && !held?.has(kid);
+      if (!state.kid || !missing(state.kid) && !this.host.eventsIn(id).some((e) => missing(kidTag(e)))) continue;
       for (const event of this.host.versions(envelopeD(id, me2))) {
         if (this.opened.has(event.id) || this.givenUp.has(event.id)) continue;
         try {
@@ -45782,7 +45884,7 @@ var Keychain = class {
     for (const state of companies.values()) pinned = noteCurrent(this.keyrings, state) || pinned;
     if (pinned) this.host.savePins?.(this.keyrings.current);
     if (changed) this.setKeys();
-    if (found && keyringRead) await this.saveKeyring(cipher);
+    if ((found || this.keyringStale) && keyringRead) await this.saveKeyring(cipher);
     return failed;
   }
   // Runs one decrypt, counting failures; after too many the event is skipped for the session.
@@ -45815,6 +45917,7 @@ var Keychain = class {
   async duty(cipher, state) {
     const me2 = this.host.me;
     const id = state.company.id;
+    if (this.unencrypted(state)) return this.planRotation(state);
     if (!state.kid || state.locked || !isAdmin(state, me2) || !this.keyrings.keys.get(id)?.has(state.kid)) return;
     if (state.rotationDue) return this.planRotation(state);
     const holders = state.holders ?? [];
@@ -45829,6 +45932,71 @@ var Keychain = class {
       if (this.sentTo(id, pk, state.kid)) continue;
       await this.publish(await envelope(cipher, id, pk, history, this.host.nextTimestamp(envelopeD(id, pk)), state.kid));
     }
+    await this.reencrypt(state, key);
+  }
+  // My profile goes into every encrypted organization I'm in, encrypted with its key; once all of them
+  // hold it, the plaintext copy from before encryption is emptied (src/domain/profile.ts).
+  async profiles(companies) {
+    const me2 = this.host.me;
+    const keys = flatten(this.keyrings);
+    const mine = (d) => this.host.versions(d).filter((e) => e.pubkey === me2);
+    const joined = [...companies.values()].filter((s) => s.members.some((m) => m.pubkey === me2));
+    const current = profilesOf([...mine(profileD(me2)), ...joined.flatMap((s) => mine(orgProfileD(s.company.id, me2)))], keys).get(me2);
+    if (!current || !joined.length) return;
+    let everywhere = true;
+    for (const state of joined) {
+      const id = state.company.id;
+      let key;
+      try {
+        key = this.keyFor(state);
+      } catch {
+        key = void 0;
+      }
+      if (!key || (this.backoff.get(id) ?? 0) > Date.now()) {
+        everywhere = false;
+        continue;
+      }
+      const copy = profilesOf(mine(orgProfileD(id, me2)), keys).get(me2);
+      if (copy && sameProfile(copy, current)) continue;
+      try {
+        await this.publish(profileTemplate(me2, current, this.host.nextTimestamp(orgProfileD(id, me2)), { companyId: id, key }));
+      } catch (error62) {
+        if (!(error62 instanceof Refused)) throw error62;
+        this.backoff.set(id, Date.now() + REFUSED_BACKOFF_MS);
+        everywhere = false;
+      }
+    }
+    const plain = mine(profileD(me2)).sort((a, b) => b.created_at - a.created_at)[0];
+    if (everywhere && plain && profilesOf([plain]).size) await this.publish(movedTemplate(me2, this.host.nextTimestamp(profileD(me2))));
+  }
+  // A plaintext organization this admin can encrypt. Any sign that it is encrypted already (an
+  // encrypted event, an envelope, a key id seen named) means the newest company event hasn't arrived,
+  // and a second key must not be made.
+  unencrypted(state) {
+    const id = state.company.id;
+    if (state.kid || state.locked || !isAdmin(state, this.host.me) || this.keyrings.current.has(id)) return false;
+    return !this.host.eventsIn(id).some((e) => isEncrypted(e) || e.tags.some((t) => t[0] === "d" && t[1].startsWith("canban:key:")));
+  }
+  // Writes the next batch of items still in plaintext again, encrypted, then waits before the next.
+  async reencrypt(state, key) {
+    const id = state.company.id;
+    const wait = (this.reencrypting.get(id) ?? 0) - Date.now();
+    if (wait > 0) return this.schedule(wait);
+    const writes = reencryptions(state, this.host.eventsIn(id), this.host.me);
+    if (!writes.length) return void this.reencrypting.delete(id);
+    this.reencrypting.set(id, Date.now() + REENCRYPT_PAUSE_MS);
+    let sent = 0;
+    for (const { address, content } of writes) {
+      if (sent === REENCRYPT_BATCH) return this.schedule(REENCRYPT_PAUSE_MS);
+      let unsigned;
+      try {
+        unsigned = template(address, content, this.host.nextTimestamp(dOf(address)), key);
+      } catch {
+        continue;
+      }
+      await this.publish(unsigned);
+      sent++;
+    }
   }
   // The holders named by this admin's own newest company event for the key.
   listedByMe(companyId, kid) {
@@ -45836,15 +46004,18 @@ var Keychain = class {
     const holders = open2(mine, flatten(this.keyrings))?.holders;
     return Array.isArray(holders) ? holders.filter((pk) => typeof pk === "string") : [];
   }
-  // Whether this admin has already sent `pk` an envelope carrying the key.
+  // Whether this admin has already sent `pk` an envelope carrying the key and every older one held
+  // here, so a key another tab's envelope left out is handed out again.
   sentTo(companyId, pk, kid) {
-    return this.host.versions(envelopeD(companyId, pk)).some((e) => e.pubkey === this.host.me && kidTag(e) === kid);
+    const held = [...this.keyrings.keys.get(companyId)?.keys() ?? []];
+    return this.host.versions(envelopeD(companyId, pk)).some((e) => e.pubkey === this.host.me && kidTag(e) === kid && held.every((k) => envelopeKids(e).includes(k)));
   }
   planRotation(state, delay) {
     const id = state.company.id;
     if (this.rotations.has(id)) return;
     const [min, max] = ROTATE_DELAY_MS;
-    const wait = delay ?? (state.company.owner === this.host.me ? 0 : min + Math.random() * (max - min));
+    const owner = state.company.owner === this.host.me ? state.rotationDue ? 0 : Math.random() * FIRST_KEY_SPREAD_MS : void 0;
+    const wait = delay ?? owner ?? min + Math.random() * (max - min);
     this.rotations.set(
       id,
       setTimeout(() => {
@@ -45856,14 +46027,17 @@ var Keychain = class {
   async rotate(companyId) {
     const state = this.host.companies()?.get(companyId);
     const cipher = this.host.cipher();
-    if (this.stopped || !state?.rotationDue || !cipher) return;
+    if (this.stopped || !state || !(state.rotationDue || this.unencrypted(state)) || !cipher) return;
     if (this.running) return this.planRotation(state, BUSY_RETRY_MS);
     const run = (async () => {
-      const r = rotation(state, this.keyrings, this.host.me);
       await this.readKeyrings(cipher);
-      merge2(this.keyrings, companyId, r.history);
-      await this.saveKeyring(cipher);
+      const first = !state.rotationDue;
+      const saved = first ? [...this.keyrings.keys.get(companyId) ?? []][0] : void 0;
+      const r = rotation(state, this.keyrings, this.host.me, saved && orgKey(saved[1]));
+      if (merge2(this.keyrings, companyId, r.history) || this.keyringStale) await this.saveKeyring(cipher);
       this.setKeys();
+      const now2 = this.host.companies()?.get(companyId);
+      if (first && (!now2 || !this.unencrypted(now2))) return;
       const { address, content } = r.company;
       await this.publish(template(address, content, this.host.nextTimestampIn(companyId), r.key));
       for (const pk of r.recipients) await this.publish(await envelope(cipher, companyId, pk, r.history, this.host.nextTimestamp(envelopeD(companyId, pk)), r.key.kid));
@@ -45889,6 +46063,7 @@ var Keychain = class {
     this.check();
     this.opened.add(event.id);
     await this.sendOrRefuse(event);
+    this.keyringStale = false;
   }
   async publish(unsigned) {
     this.check();
@@ -45908,6 +46083,10 @@ var Keychain = class {
     if (this.stopped) throw new Stopped();
   }
 };
+function lacks(copy, held) {
+  for (const [companyId, ring] of held.keys) for (const kid of ring.keys()) if (!copy.keys.get(companyId)?.has(kid)) return true;
+  return false;
+}
 
 // src/board.ts
 var READY_TIMEOUT = 1e4;
@@ -45928,6 +46107,7 @@ var Board = class {
       me: this.me,
       companies: () => this.loaded ? this.companies() : void 0,
       versions: (d) => [...this.events.values()].filter((e) => e.tags.some((t) => t[0] === "d" && t[1] === d)),
+      eventsIn: (companyId) => [...this.events.values()].filter((e) => e.tags.some((t) => t[0] === "d" && t[1].split(":")[2] === companyId)),
       cipher: () => ({
         encrypt: async (peer, text) => v2.encrypt(text, conversation(peer)),
         decrypt: async (peer, text) => v2.decrypt(text, conversation(peer))
