@@ -1,6 +1,7 @@
 import type { NostrEvent } from 'nostr-tools'
 import { parseD, type Address, type CompanyContent, type LaneContent, type MemberContent, type ProjectContent, type TaskContent } from './entities'
-import { KIND, ownerOf, type CompanyState, type Lane, type Member, type Project, type Task } from './model'
+import { KIND, ownerOf, type CompanyState, type Lane, type Member, type MemberRole, type Project, type Task } from './model'
+import { isEncrypted, open, type Keyring } from './crypto'
 
 type Versions = NostrEvent[]
 
@@ -14,11 +15,13 @@ interface CompanyEvents {
 
 const MAX_ROLE_PASSES = 8
 
-export function resolve(events: Iterable<NostrEvent>): Map<string, CompanyState> {
+// With a keyring, encrypted content is read; without the right key, structure (organizations,
+// roles, project assignees) still comes from signed tags and names are empty.
+export function resolve(events: Iterable<NostrEvent>, keyring?: Keyring): Map<string, CompanyState> {
   const grouped = group(events)
   const result = new Map<string, CompanyState>()
   for (const [companyId, ce] of grouped) {
-    const state = resolveCompany(companyId, ce)
+    const state = resolveCompany(companyId, ce, keyring)
     if (state) result.set(companyId, state)
   }
   return result
@@ -86,22 +89,36 @@ function earliest(versions: Versions, allowed: (pubkey: string) => boolean): Nos
   return first
 }
 
-function content<T>(event: NostrEvent | undefined): T | undefined {
+const tag = (event: NostrEvent, name: string) => event.tags.find((t) => t[0] === name)
+const removedTag = (event: NostrEvent) => !!tag(event, 'removed')
+const ROLES: MemberRole[] = ['admin', 'member', 'removed']
+const validRole = (role: unknown): MemberRole | undefined => (ROLES.includes(role as MemberRole) ? (role as MemberRole) : undefined)
+
+// Signed tags decide roles, assignees and deletions whenever an event carries them, so clients and
+// the relay always agree; content only supplies names. Old plaintext events without tags fall back
+// to their content.
+function memberEntry(event: NostrEvent | undefined, keyring?: Keyring): MemberContent | undefined {
   if (!event) return undefined
-  try {
-    return JSON.parse(event.content) as T
-  } catch {
-    return undefined
-  }
+  const read = open<MemberContent>(event, keyring)
+  const roleTag = tag(event, 'role')
+  const role = validRole(roleTag ? roleTag[1] : isEncrypted(event) ? undefined : read?.role)
+  return role ? { role, name: typeof read?.name === 'string' ? read.name : undefined } : undefined
 }
 
-function resolveCompany(companyId: string, ce: CompanyEvents): CompanyState | undefined {
-  const owner = ownerOf(companyId)
-  const company = content<CompanyContent>(latest(ce.company, (pk) => pk === owner))
-  if (!company?.name) return undefined
+const hasAccessTags = (event: NostrEvent) => isEncrypted(event) || event.tags.some((t) => t[0] === 'role' || t[0] === 'removed' || (t[0] === 'p' && !!t[1]))
 
-  const roles = resolveRoles(owner, ce.members)
-  const ownerEntry = content<MemberContent>(latest(ce.members.get(owner) ?? [], (pk) => pk === owner))
+function resolveCompany(companyId: string, ce: CompanyEvents, keyring?: Keyring): CompanyState | undefined {
+  const owner = ownerOf(companyId)
+  // The owner's signed company event makes the organization real, whether or not its name can be read.
+  const companyEvent = latest(ce.company, (pk) => pk === owner)
+  if (!companyEvent) return undefined
+  const read = open<CompanyContent>(companyEvent, keyring)
+  if (!isEncrypted(companyEvent) && !read?.name) return undefined
+  const company = { name: read?.name ?? '' }
+  const companyLocked = !read
+
+  const roles = resolveRoles(owner, ce.members, keyring)
+  const ownerEntry = memberEntry(latest(ce.members.get(owner) ?? [], (pk) => pk === owner), keyring)
   const members: Member[] = [{ pubkey: owner, role: 'owner', name: ownerEntry?.name }]
   for (const [pubkey, entry] of roles) {
     if (entry.role !== 'removed') members.push({ pubkey, role: entry.role, name: entry.name })
@@ -113,18 +130,24 @@ function resolveCompany(companyId: string, ce: CompanyEvents): CompanyState | un
   const lanes: Lane[] = []
   const tasks: Task[] = []
   for (const [projectId, versions] of ce.projects) {
-    const p = content<ProjectContent>(latest(versions, (pk) => admins.has(pk)))
-    if (!p || p.removed) continue
-    const assigned = (p.members ?? []).filter((pk) => memberSet.has(pk))
-    const project: Project = { id: projectId, companyId, name: p.name, members: assigned, nextNumber: 0 }
+    const event = latest(versions, (pk) => admins.has(pk))
+    if (!event) continue
+    const p = open<ProjectContent>(event, keyring)
+    if (!p && !isEncrypted(event)) continue
+    if (removedTag(event) || p?.removed) continue
+    const listed = hasAccessTags(event) ? event.tags.filter((t) => t[0] === 'p').map((t) => t[1]) : (p?.members ?? [])
+    const assigned = listed.filter((pk) => memberSet.has(pk))
+    const project: Project = { id: projectId, companyId, name: p?.name ?? '', members: assigned, nextNumber: 0, locked: !p }
     projects.push(project)
 
     const writers = new Set([...admins, ...assigned])
     const allowed = (pk: string) => writers.has(pk)
     const projectLanes: Lane[] = []
     for (const [laneId, lv] of ce.lanes.get(projectId) ?? []) {
-      const l = content<LaneContent>(latest(lv, allowed))
-      if (l && !l.removed) projectLanes.push({ id: laneId, projectId, name: l.name, order: l.order })
+      const laneEvent = latest(lv, allowed)
+      const l = open<LaneContent>(laneEvent, keyring)
+      if (laneEvent && !l && isEncrypted(laneEvent) && !removedTag(laneEvent)) project.locked = true
+      if (l && !l.removed && !(laneEvent && removedTag(laneEvent))) projectLanes.push({ id: laneId, projectId, name: l.name, order: l.order })
     }
     projectLanes.sort(byOrder)
     lanes.push(...projectLanes)
@@ -133,9 +156,11 @@ function resolveCompany(companyId: string, ce: CompanyEvents): CompanyState | un
     let highest = -1
     for (const [taskId, tv] of ce.tasks.get(projectId) ?? []) {
       const event = latest(tv, allowed)
-      const t = content<TaskContent>(event)
+      const t = open<TaskContent>(event, keyring)
+      // An unreadable task may hold a number, so new numbers can't be chosen safely.
+      if (event && !t && isEncrypted(event)) project.locked = true
       if (event && t && Number.isInteger(t.number)) highest = Math.max(highest, t.number!)
-      if (!event || !t || t.removed || projectLanes.length === 0) continue
+      if (!event || !t || t.removed || removedTag(event) || projectLanes.length === 0) continue
       const first = earliest(tv, allowed)!
       tasks.push({
         id: taskId,
@@ -161,17 +186,17 @@ function resolveCompany(companyId: string, ce: CompanyEvents): CompanyState | un
   const projectOf = new Map(tasks.map((t) => [t.id, t.projectId]))
   for (const t of tasks) t.dependsOn = [...new Set(t.dependsOn)].filter((id) => id !== t.id && projectOf.get(id) === t.projectId)
 
-  return { company: { id: companyId, owner, name: company.name }, members, projects, lanes, tasks }
+  return { locked: companyLocked, company: { id: companyId, owner, name: company.name }, members, projects, lanes, tasks }
 }
 
-function resolveRoles(owner: string, versions: Map<string, Versions>): Map<string, MemberContent> {
+function resolveRoles(owner: string, versions: Map<string, Versions>, keyring?: Keyring): Map<string, MemberContent> {
   let admins = new Set([owner])
   let roles = new Map<string, MemberContent>()
   for (let pass = 0; pass < MAX_ROLE_PASSES; pass++) {
     roles = new Map()
     for (const [pubkey, v] of versions) {
       if (pubkey === owner) continue
-      const entry = content<MemberContent>(latest(v, (pk) => admins.has(pk) && pk !== pubkey))
+      const entry = memberEntry(latest(v, (pk) => admins.has(pk) && pk !== pubkey), keyring)
       if (entry?.role) roles.set(pubkey, entry)
     }
     const next = new Set([owner, ...[...roles].filter(([, r]) => r.role === 'admin').map(([pk]) => pk)])

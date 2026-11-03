@@ -1,4 +1,5 @@
 import type { EventTemplate } from 'nostr-tools'
+import { seal, type OrgKey } from './crypto'
 import { APP_TAG, KIND, type MemberRole } from './model'
 
 export type Address =
@@ -74,14 +75,27 @@ export function parseD(d: string): Address | undefined {
   return undefined
 }
 
-export function template<A extends Address>(address: A, content: Content<A>, createdAt: number): EventTemplate {
-  const tags = [
-    ['d', dOf(address)],
-    ['t', APP_TAG],
-    ['c', address.companyId],
-  ]
-  if (address.type === 'member') tags.push(['p', address.pubkey])
-  return { kind: KIND, created_at: createdAt, tags, content: JSON.stringify(content) }
+// What access control needs is carried in signed tags as well as content, so the relay and people
+// without the organization's key can still tell roles, project assignees and deletions apart.
+function accessTags(address: Address, content: Record<string, unknown>): string[][] {
+  const tags: string[][] = []
+  if (address.type === 'member') {
+    tags.push(['p', address.pubkey])
+    if (typeof content.role === 'string') tags.push(['role', content.role])
+  }
+  if (address.type === 'project' && Array.isArray(content.members)) {
+    for (const pk of content.members) if (typeof pk === 'string') tags.push(['p', pk])
+  }
+  if (content.removed === true) tags.push(['removed'])
+  return tags
+}
+
+// With a key, the content is encrypted and the event names the key in a `k` tag.
+export function template<A extends Address>(address: A, content: Content<A>, createdAt: number, key?: OrgKey): EventTemplate {
+  const d = dOf(address)
+  const tags = [['d', d], ['t', APP_TAG], ['c', address.companyId], ...accessTags(address, content as unknown as Record<string, unknown>)]
+  if (!key) return { kind: KIND, created_at: createdAt, tags, content: JSON.stringify(content) }
+  return { kind: KIND, created_at: createdAt, tags: [...tags, ['k', key.kid]], content: seal(content, d, key) }
 }
 
 export function newId(): string {

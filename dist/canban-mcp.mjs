@@ -6625,7 +6625,7 @@ var require_discriminator = __commonJS({
     var util_1 = require_util();
     var error62 = {
       message: ({ params: { discrError, tagName } }) => discrError === types_1.DiscrError.Tag ? `tag "${tagName}" must be string` : `value of tag "${tagName}" must be in oneOf`,
-      params: ({ params: { discrError, tag, tagName } }) => (0, codegen_1._)`{error: ${discrError}, tag: ${tagName}, tagValue: ${tag}}`
+      params: ({ params: { discrError, tag: tag2, tagName } }) => (0, codegen_1._)`{error: ${discrError}, tag: ${tagName}, tagValue: ${tag2}}`
     };
     var def = {
       keyword: "discriminator",
@@ -6646,18 +6646,18 @@ var require_discriminator = __commonJS({
         if (!oneOf)
           throw new Error("discriminator: requires oneOf keyword");
         const valid = gen.let("valid", false);
-        const tag = gen.const("tag", (0, codegen_1._)`${data}${(0, codegen_1.getProperty)(tagName)}`);
-        gen.if((0, codegen_1._)`typeof ${tag} == "string"`, () => validateMapping(), () => cxt.error(false, { discrError: types_1.DiscrError.Tag, tag, tagName }));
+        const tag2 = gen.const("tag", (0, codegen_1._)`${data}${(0, codegen_1.getProperty)(tagName)}`);
+        gen.if((0, codegen_1._)`typeof ${tag2} == "string"`, () => validateMapping(), () => cxt.error(false, { discrError: types_1.DiscrError.Tag, tag: tag2, tagName }));
         cxt.ok(valid);
         function validateMapping() {
           const mapping = getMapping();
           gen.if(false);
           for (const tagValue in mapping) {
-            gen.elseIf((0, codegen_1._)`${tag} === ${tagValue}`);
+            gen.elseIf((0, codegen_1._)`${tag2} === ${tagValue}`);
             gen.assign(valid, applyTagSchema(mapping[tagValue]));
           }
           gen.else();
-          cxt.error(false, { discrError: types_1.DiscrError.Mapping, tag, tagName });
+          cxt.error(false, { discrError: types_1.DiscrError.Mapping, tag: tag2, tagName });
           gen.endIf();
         }
         function applyTagSchema(schemaProp) {
@@ -10463,7 +10463,7 @@ var require_stream = __commonJS({
       };
       duplex._final = function(callback) {
         if (ws.readyState === ws.CONNECTING) {
-          ws.once("open", function open2() {
+          ws.once("open", function open3() {
             duplex._final(callback);
           });
           return;
@@ -10484,7 +10484,7 @@ var require_stream = __commonJS({
       };
       duplex._write = function(chunk, encoding, callback) {
         if (ws.readyState === ws.CONNECTING) {
-          ws.once("open", function open2() {
+          ws.once("open", function open3() {
             duplex._write(chunk, encoding, callback);
           });
           return;
@@ -17158,8 +17158,8 @@ var Doc = class {
       arg(this, { execution: "async" });
       return;
     }
-    const content2 = arg;
-    const lines = content2.split("\n").filter((x) => x);
+    const content = arg;
+    const lines = content.split("\n").filter((x) => x);
     const minIndent = Math.min(...lines.map((x) => x.length - x.trimStart().length));
     const dedented = lines.map((x) => x.slice(minIndent)).map((x) => " ".repeat(this.indent * 2) + x);
     for (const line of dedented) {
@@ -17168,9 +17168,9 @@ var Doc = class {
   }
   compile() {
     const F = Function;
-    const content2 = this?.content ?? [``];
+    const content = this?.content ?? [``];
     const factory = new F(...Object.keys(this.closed), `return function (${this.args.join(", ")}) {
-${content2.join("\n")}
+${content.join("\n")}
 };`);
     return factory(...Object.values(this.closed));
   }
@@ -40450,10 +40450,10 @@ function concatBytes(...arrays) {
     sum += a.length;
   }
   const res = new Uint8Array(sum);
-  for (let i4 = 0, pad2 = 0; i4 < arrays.length; i4++) {
+  for (let i4 = 0, pad3 = 0; i4 < arrays.length; i4++) {
     const a = arrays[i4];
-    res.set(a, pad2);
-    pad2 += a.length;
+    res.set(a, pad3);
+    pad3 += a.length;
   }
   return res;
 }
@@ -41524,16 +41524,16 @@ var _HMAC = class {
     this.blockLen = this.iHash.blockLen;
     this.outputLen = this.iHash.outputLen;
     const blockLen = this.blockLen;
-    const pad2 = new Uint8Array(blockLen);
-    pad2.set(key.length > blockLen ? hash2.create().update(key).digest() : key);
-    for (let i4 = 0; i4 < pad2.length; i4++)
-      pad2[i4] ^= 54;
-    this.iHash.update(pad2);
+    const pad3 = new Uint8Array(blockLen);
+    pad3.set(key.length > blockLen ? hash2.create().update(key).digest() : key);
+    for (let i4 = 0; i4 < pad3.length; i4++)
+      pad3[i4] ^= 54;
+    this.iHash.update(pad3);
     this.oHash = hash2.create();
-    for (let i4 = 0; i4 < pad2.length; i4++)
-      pad2[i4] ^= 54 ^ 92;
-    this.oHash.update(pad2);
-    clean(pad2);
+    for (let i4 = 0; i4 < pad3.length; i4++)
+      pad3[i4] ^= 54 ^ 92;
+    this.oHash.update(pad3);
+    clean(pad3);
   }
   update(buf) {
     aexists(this);
@@ -41624,9 +41624,9 @@ var DER = {
   Err: DERErr,
   // Basic building block is TLV (Tag-Length-Value)
   _tlv: {
-    encode: (tag, data) => {
+    encode: (tag2, data) => {
       const { Err: E } = DER;
-      if (tag < 0 || tag > 256)
+      if (tag2 < 0 || tag2 > 256)
         throw new E("tlv.encode: wrong tag");
       if (data.length & 1)
         throw new E("tlv.encode: unpadded data");
@@ -41635,16 +41635,16 @@ var DER = {
       if (len.length / 2 & 128)
         throw new E("tlv.encode: long form length too big");
       const lenLen = dataLen > 127 ? numberToHexUnpadded(len.length / 2 | 128) : "";
-      const t = numberToHexUnpadded(tag);
+      const t = numberToHexUnpadded(tag2);
       return t + lenLen + len + data;
     },
     // v - value, l - left bytes (unparsed)
-    decode(tag, data) {
+    decode(tag2, data) {
       const { Err: E } = DER;
       let pos = 0;
-      if (tag < 0 || tag > 256)
+      if (tag2 < 0 || tag2 > 256)
         throw new E("tlv.encode: wrong tag");
-      if (data.length < 2 || data[pos++] !== tag)
+      if (data.length < 2 || data[pos++] !== tag2)
         throw new E("tlv.decode: wrong tlv");
       const first = data[pos++];
       const isLong = !!(first & 128);
@@ -42498,12 +42498,12 @@ var Pointk1 = /* @__PURE__ */ weierstrass(secp256k1_CURVE, {
 });
 var secp256k1 = /* @__PURE__ */ ecdsa(Pointk1, sha256);
 var TAGGED_HASH_PREFIXES = {};
-function taggedHash(tag, ...messages) {
-  let tagP = TAGGED_HASH_PREFIXES[tag];
+function taggedHash(tag2, ...messages) {
+  let tagP = TAGGED_HASH_PREFIXES[tag2];
   if (tagP === void 0) {
-    const tagH = sha256(asciiToBytes(tag));
+    const tagH = sha256(asciiToBytes(tag2));
     tagP = concatBytes(tagH, tagH);
-    TAGGED_HASH_PREFIXES[tag] = tagP;
+    TAGGED_HASH_PREFIXES[tag2] = tagP;
   }
   return sha256(concatBytes(tagP, ...messages));
 }
@@ -43661,7 +43661,7 @@ var Poly1305 = class {
     h[9] = d9;
   }
   finalize() {
-    const { h, pad: pad2 } = this;
+    const { h, pad: pad3 } = this;
     const g = new Uint16Array(10);
     let c = h[1] >>> 13;
     h[1] &= 8191;
@@ -43700,10 +43700,10 @@ var Poly1305 = class {
     h[5] = (h[6] >>> 2 | h[7] << 11) & 65535;
     h[6] = (h[7] >>> 5 | h[8] << 8) & 65535;
     h[7] = (h[8] >>> 8 | h[9] << 5) & 65535;
-    let f = h[0] + pad2[0];
+    let f = h[0] + pad3[0];
     h[0] = f & 65535;
     for (let i4 = 1; i4 < 8; i4++) {
-      f = (h[i4] + pad2[i4] | 0) + (f >>> 16) | 0;
+      f = (h[i4] + pad3[i4] | 0) + (f >>> 16) | 0;
       h[i4] = f & 65535;
     }
     clean2(g);
@@ -43980,21 +43980,21 @@ var _poly1305_aead = (xorStream) => (key, nonce, AAD) => {
       output2.set(plaintext);
       const oPlain = output2.subarray(0, -tagLength);
       xorStream(key, nonce, oPlain, oPlain, 1);
-      const tag = computeTag(xorStream, key, nonce, oPlain, AAD);
-      output2.set(tag, plength);
-      clean2(tag);
+      const tag2 = computeTag(xorStream, key, nonce, oPlain, AAD);
+      output2.set(tag2, plength);
+      clean2(tag2);
       return output2;
     },
     decrypt(ciphertext, output2) {
       output2 = getOutput(ciphertext.length - tagLength, output2, false);
       const data = ciphertext.subarray(0, -tagLength);
       const passedTag = ciphertext.subarray(-tagLength);
-      const tag = computeTag(xorStream, key, nonce, data, AAD);
-      if (!equalBytes(passedTag, tag))
+      const tag2 = computeTag(xorStream, key, nonce, data, AAD);
+      if (!equalBytes(passedTag, tag2))
         throw new Error("invalid tag");
       output2.set(ciphertext.subarray(0, -tagLength));
       xorStream(key, nonce, output2, output2, 1);
-      clean2(tag);
+      clean2(tag2);
       return output2;
     }
   };
@@ -44253,11 +44253,11 @@ function validateEvent(event) {
   if (!Array.isArray(event.tags))
     return false;
   for (let i22 = 0; i22 < event.tags.length; i22++) {
-    let tag = event.tags[i22];
-    if (!Array.isArray(tag))
+    let tag2 = event.tags[i22];
+    if (!Array.isArray(tag2))
       return false;
-    for (let j = 0; j < tag.length; j++) {
-      if (typeof tag[j] !== "string")
+    for (let j = 0; j < tag2.length; j++) {
+      if (typeof tag2[j] !== "string")
         return false;
     }
   }
@@ -46044,9 +46044,9 @@ function parse3(event) {
   let maybeParent;
   let maybeRoot;
   for (let i22 = event.tags.length - 1; i22 >= 0; i22--) {
-    const tag = event.tags[i22];
-    if (tag[0] === "e" && tag[1] && isHex32(tag[1])) {
-      const [_, eTagEventId, eTagRelayUrl, eTagMarker, eTagAuthor] = tag;
+    const tag2 = event.tags[i22];
+    if (tag2[0] === "e" && tag2[1] && isHex32(tag2[1])) {
+      const [_, eTagEventId, eTagRelayUrl, eTagMarker, eTagAuthor] = tag2;
       const eventPointer = {
         id: eTagEventId,
         relays: eTagRelayUrl ? [eTagRelayUrl] : [],
@@ -46072,17 +46072,17 @@ function parse3(event) {
       result.mentions.push(eventPointer);
       continue;
     }
-    if (tag[0] === "q" && tag[1] && isHex32(tag[1])) {
-      const [_, eTagEventId, eTagRelayUrl] = tag;
+    if (tag2[0] === "q" && tag2[1] && isHex32(tag2[1])) {
+      const [_, eTagEventId, eTagRelayUrl] = tag2;
       result.quotes.push({
         id: eTagEventId,
         relays: eTagRelayUrl ? [eTagRelayUrl] : []
       });
     }
-    if (tag[0] === "p" && tag[1] && isHex32(tag[1])) {
+    if (tag2[0] === "p" && tag2[1] && isHex32(tag2[1])) {
       result.profiles.push({
-        pubkey: tag[1],
-        relays: tag[2] ? [tag[2]] : []
+        pubkey: tag2[1],
+        relays: tag2[2] ? [tag2[2]] : []
       });
       continue;
     }
@@ -46184,8 +46184,8 @@ function getPowFromBytes(hash2) {
 function minePow(unsigned, difficulty, options = {}) {
   let count = 0;
   const event = unsigned;
-  const tag = ["nonce", count.toString(), difficulty.toString()];
-  event.tags.push(tag);
+  const tag2 = ["nonce", count.toString(), difficulty.toString()];
+  event.tags.push(tag2);
   while (true) {
     if (!options.keepCreatedAt) {
       const now2 = Math.floor((/* @__PURE__ */ new Date()).getTime() / 1e3);
@@ -46194,7 +46194,7 @@ function minePow(unsigned, difficulty, options = {}) {
         event.created_at = now2;
       }
     }
-    tag[1] = (++count).toString();
+    tag2[1] = (++count).toString();
     const hash2 = sha256(
       utf8Encoder.encode(JSON.stringify([0, event.pubkey, event.created_at, event.kind, event.tags, event.content]))
     );
@@ -46381,12 +46381,12 @@ function createSeal(rumor, privateKey, recipientPublicKey) {
     privateKey
   );
 }
-function createWrap(seal, recipientPublicKey) {
+function createWrap(seal2, recipientPublicKey) {
   const randomKey = generateSecretKey();
   return finalizeEvent(
     {
       kind: GiftWrap,
-      content: nip44Encrypt(seal, randomKey, recipientPublicKey),
+      content: nip44Encrypt(seal2, randomKey, recipientPublicKey),
       created_at: randomNow(),
       tags: [["p", recipientPublicKey]]
     },
@@ -46395,8 +46395,8 @@ function createWrap(seal, recipientPublicKey) {
 }
 function wrapEvent(event, senderPrivateKey, recipientPublicKey) {
   const rumor = createRumor(event, senderPrivateKey);
-  const seal = createSeal(rumor, senderPrivateKey, recipientPublicKey);
-  return createWrap(seal, recipientPublicKey);
+  const seal2 = createSeal(rumor, senderPrivateKey, recipientPublicKey);
+  return createWrap(seal2, recipientPublicKey);
 }
 function wrapManyEvents(event, senderPrivateKey, recipientsPublicKeys) {
   if (!recipientsPublicKeys || recipientsPublicKeys.length === 0) {
@@ -46413,16 +46413,16 @@ function unwrapEvent(wrap, recipientPrivateKey) {
   if (wrap.kind !== GiftWrap) {
     throw new Error(`unexpected wrap kind ${wrap.kind}, expected ${GiftWrap}`);
   }
-  const seal = nip44Decrypt(wrap, recipientPrivateKey);
-  if (seal.kind !== Seal) {
-    throw new Error(`unexpected seal kind ${seal.kind}, expected ${Seal}`);
+  const seal2 = nip44Decrypt(wrap, recipientPrivateKey);
+  if (seal2.kind !== Seal) {
+    throw new Error(`unexpected seal kind ${seal2.kind}, expected ${Seal}`);
   }
-  if (!verifyEvent(seal)) {
+  if (!verifyEvent(seal2)) {
     throw new Error("seal signature is invalid");
   }
-  const rumor = nip44Decrypt(seal, recipientPrivateKey);
-  if (rumor.pubkey !== seal.pubkey) {
-    throw new Error(`rumor pubkey ${rumor.pubkey} does not match seal pubkey ${seal.pubkey}`);
+  const rumor = nip44Decrypt(seal2, recipientPrivateKey);
+  if (rumor.pubkey !== seal2.pubkey) {
+    throw new Error(`rumor pubkey ${rumor.pubkey} does not match seal pubkey ${seal2.pubkey}`);
   }
   return rumor;
 }
@@ -46490,7 +46490,7 @@ function finishRepostEvent(t, reposted, relayUrl, privateKey) {
     {
       kind,
       tags,
-      content: t.content === "" || reposted.tags?.find((tag) => tag[0] === "-") ? "" : JSON.stringify(reposted),
+      content: t.content === "" || reposted.tags?.find((tag2) => tag2[0] === "-") ? "" : JSON.stringify(reposted),
       created_at: t.created_at
     },
     privateKey
@@ -46503,12 +46503,12 @@ function getRepostedEventPointer(event) {
   let lastETag;
   let lastPTag;
   for (let i22 = event.tags.length - 1; i22 >= 0 && (lastETag === void 0 || lastPTag === void 0); i22--) {
-    const tag = event.tags[i22];
-    if (tag.length >= 2) {
-      if (tag[0] === "e" && lastETag === void 0) {
-        lastETag = tag;
-      } else if (tag[0] === "p" && lastPTag === void 0) {
-        lastPTag = tag;
+    const tag2 = event.tags[i22];
+    if (tag2.length >= 2) {
+      if (tag2[0] === "e" && lastETag === void 0) {
+        lastETag = tag2;
+      } else if (tag2[0] === "p" && lastPTag === void 0) {
+        lastPTag = tag2;
       }
     }
   }
@@ -46587,44 +46587,44 @@ function parseAddressPointer(value, relayUrl) {
     relays: relayUrl ? [relayUrl] : []
   };
 }
-function parsePointer(tag) {
-  switch (tag[0]) {
+function parsePointer(tag2) {
+  switch (tag2[0]) {
     case "E":
     case "e":
-      if (!tag[1] || !isHex32(tag[1]))
+      if (!tag2[1] || !isHex32(tag2[1]))
         return void 0;
       return {
-        id: tag[1],
-        relays: tag[2] ? [tag[2]] : [],
-        author: tag[3] && isHex32(tag[3]) ? tag[3] : void 0
+        id: tag2[1],
+        relays: tag2[2] ? [tag2[2]] : [],
+        author: tag2[3] && isHex32(tag2[3]) ? tag2[3] : void 0
       };
     case "A":
     case "a":
-      if (!tag[1])
+      if (!tag2[1])
         return void 0;
-      return parseAddressPointer(tag[1], tag[2]);
+      return parseAddressPointer(tag2[1], tag2[2]);
     case "I":
     case "i":
-      if (!tag[1])
+      if (!tag2[1])
         return void 0;
       return {
-        value: tag[1],
-        hint: tag[2]
+        value: tag2[1],
+        hint: tag2[2]
       };
   }
 }
-function parseQuote(tag) {
-  if (!tag[1])
+function parseQuote(tag2) {
+  if (!tag2[1])
     return void 0;
-  if (tag[1].includes(":")) {
-    return parseAddressPointer(tag[1], tag[2]);
+  if (tag2[1].includes(":")) {
+    return parseAddressPointer(tag2[1], tag2[2]);
   }
-  if (!isHex32(tag[1]))
+  if (!isHex32(tag2[1]))
     return void 0;
   return {
-    id: tag[1],
-    relays: tag[2] ? [tag[2]] : [],
-    author: tag[3] && isHex32(tag[3]) ? tag[3] : void 0
+    id: tag2[1],
+    relays: tag2[2] ? [tag2[2]] : [],
+    author: tag2[3] && isHex32(tag2[3]) ? tag2[3] : void 0
   };
 }
 function choosePointer(candidates) {
@@ -46657,37 +46657,37 @@ function parse32(event) {
   };
   const rootCandidates = [];
   const replyCandidates = [];
-  for (const tag of event.tags) {
-    if ((tag[0] === "E" || tag[0] === "A" || tag[0] === "I") && tag[1]) {
-      const pointer = parsePointer(tag);
+  for (const tag2 of event.tags) {
+    if ((tag2[0] === "E" || tag2[0] === "A" || tag2[0] === "I") && tag2[1]) {
+      const pointer = parsePointer(tag2);
       if (pointer)
-        rootCandidates.push({ tagName: tag[0], pointer });
+        rootCandidates.push({ tagName: tag2[0], pointer });
       continue;
     }
-    if ((tag[0] === "e" || tag[0] === "a" || tag[0] === "i") && tag[1]) {
-      const pointer = parsePointer(tag);
+    if ((tag2[0] === "e" || tag2[0] === "a" || tag2[0] === "i") && tag2[1]) {
+      const pointer = parsePointer(tag2);
       if (pointer)
-        replyCandidates.push({ tagName: tag[0], pointer });
+        replyCandidates.push({ tagName: tag2[0], pointer });
       continue;
     }
-    if (tag[0] === "K") {
-      result.rootKind = parseKind(tag[1]);
+    if (tag2[0] === "K") {
+      result.rootKind = parseKind(tag2[1]);
       continue;
     }
-    if (tag[0] === "k") {
-      result.replyKind = parseKind(tag[1]);
+    if (tag2[0] === "k") {
+      result.replyKind = parseKind(tag2[1]);
       continue;
     }
-    if (tag[0] === "q") {
-      const pointer = parseQuote(tag);
+    if (tag2[0] === "q") {
+      const pointer = parseQuote(tag2);
       if (pointer)
         result.quotes.push(pointer);
       continue;
     }
-    if ((tag[0] === "P" || tag[0] === "p") && tag[1] && isHex32(tag[1])) {
+    if ((tag2[0] === "P" || tag2[0] === "p") && tag2[1] && isHex32(tag2[1])) {
       result.profiles.push({
-        pubkey: tag[1],
-        relays: tag[2] ? [tag[2]] : []
+        pubkey: tag2[1],
+        relays: tag2[2] ? [tag2[2]] : []
       });
     }
   }
@@ -46704,7 +46704,7 @@ __export2(nip25_exports, {
   getReactedEventPointer: () => getReactedEventPointer
 });
 function finishReactionEvent(t, reacted, privateKey) {
-  const inheritedTags = reacted.tags.filter((tag) => tag.length >= 2 && (tag[0] === "e" || tag[0] === "p"));
+  const inheritedTags = reacted.tags.filter((tag2) => tag2.length >= 2 && (tag2[0] === "e" || tag2[0] === "p"));
   return finalizeEvent(
     {
       ...t,
@@ -46722,12 +46722,12 @@ function getReactedEventPointer(event) {
   let lastETag;
   let lastPTag;
   for (let i22 = event.tags.length - 1; i22 >= 0 && (lastETag === void 0 || lastPTag === void 0); i22--) {
-    const tag = event.tags[i22];
-    if (tag.length >= 2) {
-      if (tag[0] === "e" && lastETag === void 0) {
-        lastETag = tag;
-      } else if (tag[0] === "p" && lastPTag === void 0) {
-        lastPTag = tag;
+    const tag2 = event.tags[i22];
+    if (tag2.length >= 2) {
+      if (tag2[0] === "e" && lastETag === void 0) {
+        lastETag = tag2;
+      } else if (tag2[0] === "p" && lastPTag === void 0) {
+        lastPTag = tag2;
       }
     }
   }
@@ -46746,39 +46746,39 @@ __export2(nip27_exports, {
 });
 var noCharacter = /\W/m;
 var MAX_HASHTAG_LENGTH = 42;
-function urlEnd(content2, from) {
-  const ws = content2.slice(from).search(/\s/);
-  const end = ws === -1 ? content2.length : from + ws;
-  const trailing = content2.slice(from, end).match(/[.,]*[^\w\/]?[.,]*$/);
+function urlEnd(content, from) {
+  const ws = content.slice(from).search(/\s/);
+  const end = ws === -1 ? content.length : from + ws;
+  const trailing = content.slice(from, end).match(/[.,]*[^\w\/]?[.,]*$/);
   return end - trailing[0].length;
 }
-function* parse4(content2) {
+function* parse4(content) {
   let emojis = [];
-  if (typeof content2 !== "string") {
-    for (let i22 = 0; i22 < content2.tags.length; i22++) {
-      const tag = content2.tags[i22];
-      if (tag[0] === "emoji" && tag.length >= 3) {
-        emojis.push({ type: "emoji", shortcode: tag[1], url: tag[2] });
+  if (typeof content !== "string") {
+    for (let i22 = 0; i22 < content.tags.length; i22++) {
+      const tag2 = content.tags[i22];
+      if (tag2[0] === "emoji" && tag2.length >= 3) {
+        emojis.push({ type: "emoji", shortcode: tag2[1], url: tag2[2] });
       }
     }
-    content2 = content2.content;
+    content = content.content;
   }
-  const max = content2.length;
+  const max = content.length;
   let prevIndex = 0;
   let index = 0;
   mainloop:
     while (index < max) {
-      const u = content2.indexOf(":", index);
-      const h = content2.indexOf("#", index);
+      const u = content.indexOf(":", index);
+      const h = content.indexOf("#", index);
       if (u === -1 && h === -1) {
         break mainloop;
       }
       if (u === -1 || h >= 0 && h < u) {
-        if (h === 0 || content2[h - 1].match(noCharacter)) {
-          const m = content2.slice(h + 1, h + MAX_HASHTAG_LENGTH).match(noCharacter);
+        if (h === 0 || content[h - 1].match(noCharacter)) {
+          const m = content.slice(h + 1, h + MAX_HASHTAG_LENGTH).match(noCharacter);
           const end = m ? h + 1 + m.index : max;
-          yield { type: "text", text: content2.slice(prevIndex, h), start: prevIndex, end: h };
-          yield { type: "hashtag", value: content2.slice(h + 1, end), start: h, end };
+          yield { type: "text", text: content.slice(prevIndex, h), start: prevIndex, end: h };
+          yield { type: "hashtag", value: content.slice(h + 1, end), start: h, end };
           index = end;
           prevIndex = index;
           continue mainloop;
@@ -46786,12 +46786,12 @@ function* parse4(content2) {
         index = h + 1;
         continue mainloop;
       }
-      if (content2.slice(u - 5, u) === "nostr") {
-        const m = content2.slice(u + 60).match(noCharacter);
+      if (content.slice(u - 5, u) === "nostr") {
+        const m = content.slice(u + 60).match(noCharacter);
         const end = m ? u + 60 + m.index : max;
         try {
           let pointer;
-          let { data, type } = decode3(content2.slice(u + 1, end));
+          let { data, type } = decode3(content.slice(u + 1, end));
           switch (type) {
             case "npub":
               pointer = { pubkey: data };
@@ -46806,7 +46806,7 @@ function* parse4(content2) {
               pointer = data;
           }
           if (prevIndex !== u - 5) {
-            yield { type: "text", text: content2.slice(prevIndex, u - 5), start: prevIndex, end: u - 5 };
+            yield { type: "text", text: content.slice(prevIndex, u - 5), start: prevIndex, end: u - 5 };
           }
           yield { type: "reference", pointer, start: u - 5, end };
           index = end;
@@ -46816,18 +46816,18 @@ function* parse4(content2) {
           index = u + 1;
           continue mainloop;
         }
-      } else if (content2.slice(u - 5, u) === "https" || content2.slice(u - 4, u) === "http") {
-        const end = urlEnd(content2, u + 4);
-        const prefixLen = content2[u - 1] === "s" ? 5 : 4;
+      } else if (content.slice(u - 5, u) === "https" || content.slice(u - 4, u) === "http") {
+        const end = urlEnd(content, u + 4);
+        const prefixLen = content[u - 1] === "s" ? 5 : 4;
         try {
-          let url2 = new URL(content2.slice(u - prefixLen, end));
+          let url2 = new URL(content.slice(u - prefixLen, end));
           if (url2.hostname.indexOf(".") === -1) {
             throw new Error("invalid url");
           }
           if (prevIndex !== u - prefixLen) {
             yield {
               type: "text",
-              text: content2.slice(prevIndex, u - prefixLen),
+              text: content.slice(prevIndex, u - prefixLen),
               start: prevIndex,
               end: u - prefixLen
             };
@@ -46858,18 +46858,18 @@ function* parse4(content2) {
           index = end + 1;
           continue mainloop;
         }
-      } else if (content2.slice(u - 3, u) === "wss" || content2.slice(u - 2, u) === "ws") {
-        const end = urlEnd(content2, u + 4);
-        const prefixLen = content2[u - 1] === "s" ? 3 : 2;
+      } else if (content.slice(u - 3, u) === "wss" || content.slice(u - 2, u) === "ws") {
+        const end = urlEnd(content, u + 4);
+        const prefixLen = content[u - 1] === "s" ? 3 : 2;
         try {
-          let url2 = new URL(content2.slice(u - prefixLen, end));
+          let url2 = new URL(content.slice(u - prefixLen, end));
           if (url2.hostname.indexOf(".") === -1) {
             throw new Error("invalid ws url");
           }
           if (prevIndex !== u - prefixLen) {
             yield {
               type: "text",
-              text: content2.slice(prevIndex, u - prefixLen),
+              text: content.slice(prevIndex, u - prefixLen),
               start: prevIndex,
               end: u - prefixLen
             };
@@ -46885,9 +46885,9 @@ function* parse4(content2) {
       } else {
         for (let e = 0; e < emojis.length; e++) {
           const emoji3 = emojis[e];
-          if (content2[u + emoji3.shortcode.length + 1] === ":" && content2.slice(u + 1, u + emoji3.shortcode.length + 1) === emoji3.shortcode) {
+          if (content[u + emoji3.shortcode.length + 1] === ":" && content.slice(u + 1, u + emoji3.shortcode.length + 1) === emoji3.shortcode) {
             if (prevIndex !== u) {
-              yield { type: "text", text: content2.slice(prevIndex, u), start: prevIndex, end: u };
+              yield { type: "text", text: content.slice(prevIndex, u), start: prevIndex, end: u };
             }
             yield { ...emoji3, start: u, end: u + emoji3.shortcode.length + 2 };
             index = u + emoji3.shortcode.length + 2;
@@ -46900,7 +46900,7 @@ function* parse4(content2) {
       }
     }
   if (prevIndex !== max) {
-    yield { type: "text", text: content2.slice(prevIndex), start: prevIndex, end: max };
+    yield { type: "text", text: content.slice(prevIndex), start: prevIndex, end: max };
   }
 }
 var nip28_exports = {};
@@ -46912,11 +46912,11 @@ __export2(nip28_exports, {
   channelMuteUserEvent: () => channelMuteUserEvent
 });
 var channelCreateEvent = (t, privateKey) => {
-  let content2;
+  let content;
   if (typeof t.content === "object") {
-    content2 = JSON.stringify(t.content);
+    content = JSON.stringify(t.content);
   } else if (typeof t.content === "string") {
-    content2 = t.content;
+    content = t.content;
   } else {
     return void 0;
   }
@@ -46924,18 +46924,18 @@ var channelCreateEvent = (t, privateKey) => {
     {
       kind: ChannelCreation,
       tags: [...t.tags ?? []],
-      content: content2,
+      content,
       created_at: t.created_at
     },
     privateKey
   );
 };
 var channelMetadataEvent = (t, privateKey) => {
-  let content2;
+  let content;
   if (typeof t.content === "object") {
-    content2 = JSON.stringify(t.content);
+    content = JSON.stringify(t.content);
   } else if (typeof t.content === "string") {
-    content2 = t.content;
+    content = t.content;
   } else {
     return void 0;
   }
@@ -46943,7 +46943,7 @@ var channelMetadataEvent = (t, privateKey) => {
     {
       kind: ChannelMetadata,
       tags: [["e", t.channel_create_event_id], ...t.tags ?? []],
-      content: content2,
+      content,
       created_at: t.created_at
     },
     privateKey
@@ -46965,11 +46965,11 @@ var channelMessageEvent = (t, privateKey) => {
   );
 };
 var channelHideMessageEvent = (t, privateKey) => {
-  let content2;
+  let content;
   if (typeof t.content === "object") {
-    content2 = JSON.stringify(t.content);
+    content = JSON.stringify(t.content);
   } else if (typeof t.content === "string") {
-    content2 = t.content;
+    content = t.content;
   } else {
     return void 0;
   }
@@ -46977,18 +46977,18 @@ var channelHideMessageEvent = (t, privateKey) => {
     {
       kind: ChannelHideMessage,
       tags: [["e", t.channel_message_event_id], ...t.tags ?? []],
-      content: content2,
+      content,
       created_at: t.created_at
     },
     privateKey
   );
 };
 var channelMuteUserEvent = (t, privateKey) => {
-  let content2;
+  let content;
   if (typeof t.content === "object") {
-    content2 = JSON.stringify(t.content);
+    content = JSON.stringify(t.content);
   } else if (typeof t.content === "string") {
-    content2 = t.content;
+    content = t.content;
   } else {
     return void 0;
   }
@@ -46996,7 +46996,7 @@ var channelMuteUserEvent = (t, privateKey) => {
     {
       kind: ChannelMuteUser,
       tags: [["p", t.pubkey_to_mute], ...t.tags ?? []],
-      content: content2,
+      content,
       created_at: t.created_at
     },
     privateKey
@@ -47011,8 +47011,8 @@ __export2(nip30_exports, {
 });
 var EMOJI_SHORTCODE_REGEX = /:(\w+):/;
 var regex = () => new RegExp(`\\B${EMOJI_SHORTCODE_REGEX.source}\\B`, "g");
-function* matchAll(content2) {
-  const matches = content2.matchAll(regex());
+function* matchAll(content) {
+  const matches = content.matchAll(regex());
   for (const match of matches) {
     try {
       const [shortcode, name] = match;
@@ -47026,8 +47026,8 @@ function* matchAll(content2) {
     }
   }
 }
-function replaceAll(content2, replacer) {
-  return content2.replaceAll(regex(), (shortcode, name) => {
+function replaceAll(content, replacer) {
+  return content.replaceAll(regex(), (shortcode, name) => {
     return replacer({
       shortcode,
       name
@@ -47071,13 +47071,13 @@ function parseConnectionString(connectionString) {
   return { pubkey, relay: relays[0], relays, secret };
 }
 async function makeNwcRequestEvent(pubkey, secretKey, invoice) {
-  const content2 = {
+  const content = {
     method: "pay_invoice",
     params: {
       invoice
     }
   };
-  const encryptedContent = encrypt2(secretKey, pubkey, JSON.stringify(content2));
+  const encryptedContent = encrypt2(secretKey, pubkey, JSON.stringify(content));
   const eventTemplate = {
     kind: NWCWalletRequest,
     created_at: Math.round(Date.now() / 1e3),
@@ -47890,11 +47890,11 @@ function validateEvent3(event) {
   if (!Array.isArray(event.tags))
     return false;
   for (let i22 = 0; i22 < event.tags.length; i22++) {
-    let tag = event.tags[i22];
-    if (!Array.isArray(tag))
+    let tag2 = event.tags[i22];
+    if (!Array.isArray(tag2))
       return false;
-    for (let j = 0; j < tag.length; j++) {
-      if (typeof tag[j] !== "string")
+    for (let j = 0; j < tag2.length; j++) {
+      if (typeof tag2[j] !== "string")
         return false;
     }
   }
@@ -48002,11 +48002,11 @@ function validateEvent4(event) {
   if (!Array.isArray(event.tags))
     return false;
   for (let i22 = 0; i22 < event.tags.length; i22++) {
-    let tag = event.tags[i22];
-    if (!Array.isArray(tag))
+    let tag2 = event.tags[i22];
+    if (!Array.isArray(tag2))
       return false;
-    for (let j = 0; j < tag.length; j++) {
-      if (typeof tag[j] !== "string")
+    for (let j = 0; j < tag2.length; j++) {
+      if (typeof tag2[j] !== "string")
         return false;
     }
   }
@@ -48060,10 +48060,162 @@ var getPublicKey3 = i3.getPublicKey;
 var finalizeEvent3 = i3.finalizeEvent;
 var verifyEvent3 = i3.verifyEvent;
 
+// node_modules/nostr-tools/lib/esm/nip44.js
+var utf8Decoder4 = new TextDecoder("utf-8");
+var utf8Encoder5 = new TextEncoder();
+var minPlaintextSize2 = 1;
+var maxPlaintextSize2 = 4294967295;
+var extendedPrefixThreshold2 = 65536;
+function getConversationKey2(privkeyA, pubkeyB) {
+  const sharedX = secp256k1.getSharedSecret(privkeyA, hexToBytes("02" + pubkeyB)).subarray(1, 33);
+  return extract(sha256, sharedX, utf8Encoder5.encode("nip44-v2"));
+}
+function getMessageKeys2(conversationKey, nonce) {
+  const keys = expand(sha256, conversationKey, nonce, 76);
+  return {
+    chacha_key: keys.subarray(0, 32),
+    chacha_nonce: keys.subarray(32, 44),
+    hmac_key: keys.subarray(44, 76)
+  };
+}
+function calcPaddedLen2(len) {
+  if (!Number.isSafeInteger(len) || len < 1)
+    throw new Error("expected positive integer");
+  if (len <= 32)
+    return 32;
+  const nextPower = 2 ** (Math.floor(Math.log2(len - 1)) + 1);
+  const chunk = nextPower <= 256 ? 32 : nextPower / 8;
+  return chunk * (Math.floor((len - 1) / chunk) + 1);
+}
+function writeU16BE2(num2) {
+  if (!Number.isSafeInteger(num2) || num2 < minPlaintextSize2 || num2 > 65535)
+    throw new Error("invalid plaintext size: must be between 1 and 65535 bytes");
+  const arr = new Uint8Array(2);
+  new DataView(arr.buffer).setUint16(0, num2, false);
+  return arr;
+}
+function writeU32BE2(num2) {
+  if (!Number.isSafeInteger(num2) || num2 < extendedPrefixThreshold2 || num2 > maxPlaintextSize2)
+    throw new Error("invalid plaintext size: must be between 65536 and 4294967295 bytes");
+  const arr = new Uint8Array(4);
+  new DataView(arr.buffer).setUint32(0, num2, false);
+  return arr;
+}
+function pad2(plaintext) {
+  const unpadded = utf8Encoder5.encode(plaintext);
+  const unpaddedLen = unpadded.length;
+  if (unpaddedLen < minPlaintextSize2 || unpaddedLen > maxPlaintextSize2)
+    throw new Error("invalid plaintext size: must be between 1 and 4294967295 bytes");
+  const prefix = unpaddedLen >= extendedPrefixThreshold2 ? concatBytes(new Uint8Array([0, 0]), writeU32BE2(unpaddedLen)) : writeU16BE2(unpaddedLen);
+  const suffix = new Uint8Array(calcPaddedLen2(unpaddedLen) - unpaddedLen);
+  return concatBytes(prefix, unpadded, suffix);
+}
+function unpad2(padded) {
+  const dv = new DataView(padded.buffer, padded.byteOffset, padded.byteLength);
+  const firstTwo = dv.getUint16(0);
+  let unpaddedLen;
+  let prefixLen;
+  if (firstTwo === 0) {
+    unpaddedLen = dv.getUint32(2);
+    if (unpaddedLen < extendedPrefixThreshold2)
+      throw new Error("invalid padding");
+    prefixLen = 6;
+  } else {
+    unpaddedLen = firstTwo;
+    prefixLen = 2;
+  }
+  const unpadded = padded.subarray(prefixLen, prefixLen + unpaddedLen);
+  if (unpaddedLen < minPlaintextSize2 || unpaddedLen > maxPlaintextSize2 || unpadded.length !== unpaddedLen || padded.length !== prefixLen + calcPaddedLen2(unpaddedLen))
+    throw new Error("invalid padding");
+  return utf8Decoder4.decode(unpadded);
+}
+function hmacAad2(key, message, aad) {
+  if (aad.length !== 32)
+    throw new Error("AAD associated data must be 32 bytes");
+  const combined = concatBytes(aad, message);
+  return hmac(sha256, key, combined);
+}
+function decodePayload2(payload) {
+  if (typeof payload !== "string")
+    throw new Error("payload must be a valid string");
+  const plen = payload.length;
+  if (plen < 132)
+    throw new Error("invalid payload length: " + plen);
+  if (payload[0] === "#")
+    throw new Error("unknown encryption version");
+  let data;
+  try {
+    data = base643.decode(payload);
+  } catch (error62) {
+    throw new Error("invalid base64: " + error62.message);
+  }
+  const dlen = data.length;
+  if (dlen < 99)
+    throw new Error("invalid data length: " + dlen);
+  const vers = data[0];
+  if (vers !== 2)
+    throw new Error("unknown encryption version " + vers);
+  return {
+    nonce: data.subarray(1, 33),
+    ciphertext: data.subarray(33, -32),
+    mac: data.subarray(-32)
+  };
+}
+function encrypt3(plaintext, conversationKey, nonce = randomBytes(32)) {
+  const { chacha_key, chacha_nonce, hmac_key } = getMessageKeys2(conversationKey, nonce);
+  const padded = pad2(plaintext);
+  const ciphertext = chacha20(chacha_key, chacha_nonce, padded);
+  const mac3 = hmacAad2(hmac_key, ciphertext, nonce);
+  return base643.encode(concatBytes(new Uint8Array([2]), nonce, ciphertext, mac3));
+}
+function decrypt3(payload, conversationKey) {
+  const { nonce, ciphertext, mac: mac3 } = decodePayload2(payload);
+  const { chacha_key, chacha_nonce, hmac_key } = getMessageKeys2(conversationKey, nonce);
+  const calculatedMac = hmacAad2(hmac_key, ciphertext, nonce);
+  if (!equalBytes(calculatedMac, mac3))
+    throw new Error("invalid MAC");
+  const padded = chacha20(chacha_key, chacha_nonce, ciphertext);
+  return unpad2(padded);
+}
+var v22 = {
+  utils: {
+    getConversationKey: getConversationKey2,
+    calcPaddedLen: calcPaddedLen2,
+    pad: pad2,
+    unpad: unpad2
+  },
+  encrypt: encrypt3,
+  decrypt: decrypt3
+};
+
+// src/domain/crypto.ts
+function seal(content, d, key) {
+  const json2 = JSON.stringify({ ...content, d });
+  if (new TextEncoder().encode(json2).length > MAX_PLAINTEXT) throw new Error("This item is too large to save.");
+  return v22.encrypt(json2, key.key);
+}
+var kidTag = (event) => event.tags.find((t) => t[0] === "k")?.[1];
+var isEncrypted = (event) => event.tags.some((t) => t[0] === "k");
+var MAX_PLAINTEXT = 65535;
+function open2(event, keyring) {
+  if (!event) return void 0;
+  try {
+    if (!isEncrypted(event)) return JSON.parse(event.content);
+    const kid = kidTag(event);
+    const key = kid ? keyring?.get(kid) : void 0;
+    if (!key) return void 0;
+    const { d, ...content } = JSON.parse(v22.decrypt(event.content, key));
+    return d === event.tags.find((t) => t[0] === "d")?.[1] ? content : void 0;
+  } catch {
+    return void 0;
+  }
+}
+
 // src/domain/model.ts
 var KIND = 30078;
 var APP_TAG = "canban";
 var OPERATOR = "c14156fdd00160ff55221dadd8616475a318f6d8ca17392dc9ea513b2bac38fe";
+var MAX_TASK_BODY_BYTES = 3e4;
 function ownerOf(companyId) {
   return companyId.split(".")[0];
 }
@@ -48107,14 +48259,23 @@ function parseD(d) {
   if (type === "task" && a && b) return { type, companyId, projectId: a, taskId: b };
   return void 0;
 }
-function template(address, content2, createdAt) {
-  const tags = [
-    ["d", dOf(address)],
-    ["t", APP_TAG],
-    ["c", address.companyId]
-  ];
-  if (address.type === "member") tags.push(["p", address.pubkey]);
-  return { kind: KIND, created_at: createdAt, tags, content: JSON.stringify(content2) };
+function accessTags(address, content) {
+  const tags = [];
+  if (address.type === "member") {
+    tags.push(["p", address.pubkey]);
+    if (typeof content.role === "string") tags.push(["role", content.role]);
+  }
+  if (address.type === "project" && Array.isArray(content.members)) {
+    for (const pk of content.members) if (typeof pk === "string") tags.push(["p", pk]);
+  }
+  if (content.removed === true) tags.push(["removed"]);
+  return tags;
+}
+function template(address, content, createdAt, key) {
+  const d = dOf(address);
+  const tags = [["d", d], ["t", APP_TAG], ["c", address.companyId], ...accessTags(address, content)];
+  if (!key) return { kind: KIND, created_at: createdAt, tags, content: JSON.stringify(content) };
+  return { kind: KIND, created_at: createdAt, tags: [...tags, ["k", key.kid]], content: seal(content, d, key) };
 }
 function newId() {
   const bytes = crypto.getRandomValues(new Uint8Array(8));
@@ -48123,11 +48284,11 @@ function newId() {
 
 // src/domain/resolve.ts
 var MAX_ROLE_PASSES = 8;
-function resolve(events) {
+function resolve(events, keyring) {
   const grouped = group(events);
   const result = /* @__PURE__ */ new Map();
   for (const [companyId, ce] of grouped) {
-    const state = resolveCompany(companyId, ce);
+    const state = resolveCompany(companyId, ce, keyring);
     if (state) result.set(companyId, state);
   }
   return result;
@@ -48190,20 +48351,28 @@ function earliest(versions, allowed) {
   }
   return first;
 }
-function content(event) {
+var tag = (event, name) => event.tags.find((t) => t[0] === name);
+var removedTag = (event) => !!tag(event, "removed");
+var ROLES = ["admin", "member", "removed"];
+var validRole = (role) => ROLES.includes(role) ? role : void 0;
+function memberEntry(event, keyring) {
   if (!event) return void 0;
-  try {
-    return JSON.parse(event.content);
-  } catch {
-    return void 0;
-  }
+  const read = open2(event, keyring);
+  const roleTag = tag(event, "role");
+  const role = validRole(roleTag ? roleTag[1] : isEncrypted(event) ? void 0 : read?.role);
+  return role ? { role, name: typeof read?.name === "string" ? read.name : void 0 } : void 0;
 }
-function resolveCompany(companyId, ce) {
+var hasAccessTags = (event) => isEncrypted(event) || event.tags.some((t) => t[0] === "role" || t[0] === "removed" || t[0] === "p" && !!t[1]);
+function resolveCompany(companyId, ce, keyring) {
   const owner = ownerOf(companyId);
-  const company = content(latest(ce.company, (pk) => pk === owner));
-  if (!company?.name) return void 0;
-  const roles = resolveRoles(owner, ce.members);
-  const ownerEntry = content(latest(ce.members.get(owner) ?? [], (pk) => pk === owner));
+  const companyEvent = latest(ce.company, (pk) => pk === owner);
+  if (!companyEvent) return void 0;
+  const read = open2(companyEvent, keyring);
+  if (!isEncrypted(companyEvent) && !read?.name) return void 0;
+  const company = { name: read?.name ?? "" };
+  const companyLocked = !read;
+  const roles = resolveRoles(owner, ce.members, keyring);
+  const ownerEntry = memberEntry(latest(ce.members.get(owner) ?? [], (pk) => pk === owner), keyring);
   const members2 = [{ pubkey: owner, role: "owner", name: ownerEntry?.name }];
   for (const [pubkey, entry] of roles) {
     if (entry.role !== "removed") members2.push({ pubkey, role: entry.role, name: entry.name });
@@ -48214,27 +48383,34 @@ function resolveCompany(companyId, ce) {
   const lanes = [];
   const tasks = [];
   for (const [projectId, versions] of ce.projects) {
-    const p = content(latest(versions, (pk) => admins.has(pk)));
-    if (!p || p.removed) continue;
-    const assigned = (p.members ?? []).filter((pk) => memberSet.has(pk));
-    const project = { id: projectId, companyId, name: p.name, members: assigned, nextNumber: 0 };
+    const event = latest(versions, (pk) => admins.has(pk));
+    if (!event) continue;
+    const p = open2(event, keyring);
+    if (!p && !isEncrypted(event)) continue;
+    if (removedTag(event) || p?.removed) continue;
+    const listed = hasAccessTags(event) ? event.tags.filter((t) => t[0] === "p").map((t) => t[1]) : p?.members ?? [];
+    const assigned = listed.filter((pk) => memberSet.has(pk));
+    const project = { id: projectId, companyId, name: p?.name ?? "", members: assigned, nextNumber: 0, locked: !p };
     projects.push(project);
     const writers = /* @__PURE__ */ new Set([...admins, ...assigned]);
     const allowed = (pk) => writers.has(pk);
     const projectLanes = [];
     for (const [laneId, lv] of ce.lanes.get(projectId) ?? []) {
-      const l = content(latest(lv, allowed));
-      if (l && !l.removed) projectLanes.push({ id: laneId, projectId, name: l.name, order: l.order });
+      const laneEvent = latest(lv, allowed);
+      const l = open2(laneEvent, keyring);
+      if (laneEvent && !l && isEncrypted(laneEvent) && !removedTag(laneEvent)) project.locked = true;
+      if (l && !l.removed && !(laneEvent && removedTag(laneEvent))) projectLanes.push({ id: laneId, projectId, name: l.name, order: l.order });
     }
     projectLanes.sort(byOrder);
     lanes.push(...projectLanes);
     const laneIds = new Set(projectLanes.map((l) => l.id));
     let highest = -1;
     for (const [taskId, tv] of ce.tasks.get(projectId) ?? []) {
-      const event = latest(tv, allowed);
-      const t = content(event);
-      if (event && t && Number.isInteger(t.number)) highest = Math.max(highest, t.number);
-      if (!event || !t || t.removed || projectLanes.length === 0) continue;
+      const event2 = latest(tv, allowed);
+      const t = open2(event2, keyring);
+      if (event2 && !t && isEncrypted(event2)) project.locked = true;
+      if (event2 && t && Number.isInteger(t.number)) highest = Math.max(highest, t.number);
+      if (!event2 || !t || t.removed || removedTag(event2) || projectLanes.length === 0) continue;
       const first = earliest(tv, allowed);
       tasks.push({
         id: taskId,
@@ -48249,8 +48425,8 @@ function resolveCompany(companyId, ce) {
         dependsOn: Array.isArray(t.dependsOn) ? t.dependsOn : [],
         createdBy: first.pubkey,
         createdAt: first.created_at,
-        updatedBy: event.pubkey,
-        updatedAt: event.created_at
+        updatedBy: event2.pubkey,
+        updatedAt: event2.created_at
       });
     }
     project.nextNumber = highest + 1;
@@ -48259,16 +48435,16 @@ function resolveCompany(companyId, ce) {
   tasks.sort(byOrder);
   const projectOf2 = new Map(tasks.map((t) => [t.id, t.projectId]));
   for (const t of tasks) t.dependsOn = [...new Set(t.dependsOn)].filter((id) => id !== t.id && projectOf2.get(id) === t.projectId);
-  return { company: { id: companyId, owner, name: company.name }, members: members2, projects, lanes, tasks };
+  return { locked: companyLocked, company: { id: companyId, owner, name: company.name }, members: members2, projects, lanes, tasks };
 }
-function resolveRoles(owner, versions) {
+function resolveRoles(owner, versions, keyring) {
   let admins = /* @__PURE__ */ new Set([owner]);
   let roles = /* @__PURE__ */ new Map();
   for (let pass = 0; pass < MAX_ROLE_PASSES; pass++) {
     roles = /* @__PURE__ */ new Map();
     for (const [pubkey, v] of versions) {
       if (pubkey === owner) continue;
-      const entry = content(latest(v, (pk) => admins.has(pk) && pk !== pubkey));
+      const entry = memberEntry(latest(v, (pk) => admins.has(pk) && pk !== pubkey), keyring);
       if (entry?.role) roles.set(pubkey, entry);
     }
     const next = /* @__PURE__ */ new Set([owner, ...[...roles].filter(([, r]) => r.role === "admin").map(([pk]) => pk)]);
@@ -48291,8 +48467,14 @@ function between(before, after) {
 }
 
 // src/domain/commands.ts
-function write(address, content2) {
-  return { address, content: content2 };
+function writable(project) {
+  if (project.locked) throw new Error("This project can't be changed from here yet.");
+}
+function checkBody(body) {
+  if (body && new TextEncoder().encode(body).length > MAX_TASK_BODY_BYTES) throw new Error("The description is too long.");
+}
+function write(address, content) {
+  return { address, content };
 }
 function createLane(companyId, projectId, name, after) {
   return [write({ type: "lane", companyId, projectId, laneId: newId() }, { name, order: between(after?.order, void 0) })];
@@ -48301,6 +48483,8 @@ function updateLane(companyId, lane, patch) {
   return [write({ type: "lane", companyId, projectId: lane.projectId, laneId: lane.id }, { name: lane.name, order: lane.order, ...patch })];
 }
 function createTask(project, lane, title, last, extra = {}) {
+  writable(project);
+  checkBody(extra.body);
   const taskId = newId();
   const number4 = project.nextNumber;
   return {
@@ -48315,6 +48499,7 @@ function createTask(project, lane, title, last, extra = {}) {
   };
 }
 function updateTask(companyId, task, patch) {
+  checkBody(patch.body);
   const { lane, title, body, order, assignee, labels, number: number4, dependsOn } = task;
   return [write({ type: "task", companyId, projectId: task.projectId, taskId: task.id }, { lane, title, body, order, assignee, labels, number: number4, dependsOn, ...patch })];
 }
@@ -48408,8 +48593,8 @@ function withinFreeTier(state) {
 }
 function blockedWrite(state, list, write2, today) {
   if (entitlement(list, state.company.id, today) !== "unpaid") return void 0;
-  const { address, content: content2 } = write2;
-  const removing = "removed" in content2 && content2.removed || "role" in content2 && content2.role === "removed";
+  const { address, content } = write2;
+  const removing = "removed" in content && content.removed || "role" in content && content.role === "removed";
   if (removing) return void 0;
   const limits = `The free plan covers ${FREE_PROJECTS} project and ${FREE_PEOPLE} people. The organization owner can subscribe under Plan & billing.`;
   if (!withinFreeTier(state)) return `This organization is read-only: it is over the free plan. ${limits}`;
@@ -48505,10 +48690,10 @@ var Board = class {
       const blocked = state && blockedWrite(state, list, write2);
       if (blocked) throw new Error(blocked);
     }
-    for (const { address, content: content2 } of writes) {
+    for (const { address, content } of writes) {
       const d = dOf(address);
       const createdAt = Math.max(Math.floor(Date.now() / 1e3), (this.newestByD.get(d) ?? 0) + 1);
-      const event = finalizeEvent3(template(address, content2, createdAt), this.secret);
+      const event = finalizeEvent3(template(address, content, createdAt), this.secret);
       this.add(event);
       await Promise.any(this.pool.publish([this.relay], event, { onauth: async (e) => finalizeEvent3(e, this.secret) })).catch((error62) => {
         const reason = error62 instanceof AggregateError ? error62.errors[0] : error62;
@@ -48695,7 +48880,7 @@ function registerTools(server2, board2, me2) {
     }
   };
   const mine = () => myCompanies(board2.companies(), me2.pubkey);
-  const writable = (state, project) => {
+  const writable2 = (state, project) => {
     if (!canWrite(state, project, me2.pubkey)) {
       throw new LookupError(`This agent can see "${project.name}" but is not on it. Ask an admin to tick it in the project's Settings.`);
     }
@@ -48822,7 +49007,7 @@ function registerTools(server2, board2, me2) {
     },
     guard(async (args) => {
       const { state, item } = findProject(mine(), me2.pubkey, args.project);
-      writable(state, item);
+      writable2(state, item);
       const lane = findLane(state, item, args.lane);
       const names = await board2.names(state.members.map((m) => m.pubkey));
       const assignee = args.assignee ? findMember(state, me2.pubkey, args.assignee, names).pubkey : void 0;
@@ -48854,7 +49039,7 @@ function registerTools(server2, board2, me2) {
     guard(async (args) => {
       const { state, item } = findTask(mine(), me2.pubkey, args.task);
       const project = projectOf(state, item);
-      writable(state, project);
+      writable2(state, project);
       const names = await board2.names(state.members.map((m) => m.pubkey));
       const patch = {
         ...args.title !== void 0 ? { title: args.title.trim() } : {},
@@ -48881,7 +49066,7 @@ function registerTools(server2, board2, me2) {
     guard(async (args) => {
       const { state, item } = findTask(mine(), me2.pubkey, args.task);
       const project = projectOf(state, item);
-      writable(state, project);
+      writable2(state, project);
       const lane = findLane(state, project, args.lane);
       const others = tasksInLane(state, lane.id).filter((t) => t.id !== item.id);
       const order = args.position === "top" ? (others[0]?.order ?? 1024) - 1024 : (others.at(-1)?.order ?? 0) + 1024;
@@ -48899,7 +49084,7 @@ function registerTools(server2, board2, me2) {
     },
     guard(async ({ task }) => {
       const { state, item } = findTask(mine(), me2.pubkey, task);
-      writable(state, projectOf(state, item));
+      writable2(state, projectOf(state, item));
       await board2.apply(updateTask(state.company.id, item, { removed: true }));
       return ok({ deleted: item.id, title: item.title });
     })
@@ -48913,7 +49098,7 @@ function registerTools(server2, board2, me2) {
     },
     guard(async ({ project, name }) => {
       const { state, item } = findProject(mine(), me2.pubkey, project);
-      writable(state, item);
+      writable2(state, item);
       await board2.apply(createLane(state.company.id, item.id, name.trim(), lanesOf(state, item.id).at(-1)));
       return ok({ created: name.trim(), project: item.name });
     })
@@ -48927,7 +49112,7 @@ function registerTools(server2, board2, me2) {
     },
     guard(async (args) => {
       const { state, item } = findProject(mine(), me2.pubkey, args.project);
-      writable(state, item);
+      writable2(state, item);
       const lane = findLane(state, item, args.lane);
       await board2.apply(updateLane(state.company.id, lane, { name: args.name.trim() }));
       return ok({ renamed: lane.name, to: args.name.trim() });
@@ -48946,7 +49131,7 @@ function registerTools(server2, board2, me2) {
     },
     guard(async (args) => {
       const { state, item } = findProject(mine(), me2.pubkey, args.project);
-      writable(state, item);
+      writable2(state, item);
       const lane = findLane(state, item, args.lane);
       const others = lanesOf(state, item.id).filter((l) => l.id !== lane.id);
       const at = Math.min(args.position, others.length + 1) - 1;

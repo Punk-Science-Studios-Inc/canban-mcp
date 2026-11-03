@@ -1,5 +1,15 @@
 import { newId, type Address, type Content, type LaneContent, type TaskContent } from './entities'
-import { DEFAULT_LANES, type CompanyState, type Lane, type MemberRole, type Project, type Task } from './model'
+import { DEFAULT_LANES, MAX_TASK_BODY_BYTES, type CompanyState, type Lane, type MemberRole, type Project, type Task } from './model'
+
+// A project whose content can't be read must not be written to: it would overwrite encrypted data
+// with plaintext or reuse task numbers it can't see.
+function writable(project: Project): void {
+  if (project.locked) throw new Error("This project can't be changed from here yet.")
+}
+
+function checkBody(body: string | undefined): void {
+  if (body && new TextEncoder().encode(body).length > MAX_TASK_BODY_BYTES) throw new Error('The description is too long.')
+}
 import { between } from './order'
 
 export type Write = { [A in Address as A['type']]: { address: A; content: Content<A> } }[Address['type']]
@@ -33,6 +43,7 @@ export function createProject(companyId: string, name: string, members: string[]
 }
 
 export function updateProject(project: Project, patch: Partial<Pick<Project, 'name' | 'members'>>): Write[] {
+  writable(project)
   const { companyId, id: projectId } = project
   return [write({ type: 'project', companyId, projectId }, { name: project.name, members: project.members, ...patch })]
 }
@@ -57,6 +68,8 @@ export function createTask(
   last?: Task,
   extra: Partial<Pick<TaskContent, 'body' | 'labels' | 'assignee' | 'dependsOn'>> = {},
 ): { taskId: string; number: number; writes: Write[] } {
+  writable(project)
+  checkBody(extra.body)
   const taskId = newId()
   const number = project.nextNumber
   return {
@@ -72,6 +85,7 @@ export function createTask(
 }
 
 export function updateTask(companyId: string, task: Task, patch: Partial<TaskContent>): Write[] {
+  checkBody(patch.body)
   const { lane, title, body, order, assignee, labels, number, dependsOn } = task
   return [write({ type: 'task', companyId, projectId: task.projectId, taskId: task.id }, { lane, title, body, order, assignee, labels, number, dependsOn, ...patch })]
 }

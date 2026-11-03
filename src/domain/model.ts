@@ -3,6 +3,9 @@ export const APP_TAG = 'canban'
 export const OPERATOR = 'c14156fdd00160ff55221dadd8616475a318f6d8ca17392dc9ea513b2bac38fe'
 export const RELAY_LIST_D = 'canban/members'
 export const DEFAULT_LANES = ['To do', 'In progress', 'Complete']
+// Encrypted, a body this long (even all 3-byte characters) fits the relay's 64 KB event limit.
+export const MAX_TASK_BODY = 10_000
+export const MAX_TASK_BODY_BYTES = 30_000
 
 export type Role = 'owner' | 'admin' | 'member'
 export type MemberRole = Exclude<Role, 'owner'> | 'removed'
@@ -25,6 +28,8 @@ export interface Project {
   name: string
   members: string[]
   nextNumber: number
+  // Some of its content couldn't be read (no key): it must not be written to.
+  locked?: boolean
 }
 
 export interface Lane {
@@ -52,6 +57,8 @@ export interface Task {
 }
 
 export interface CompanyState {
+  // Its name or other content couldn't be read (no key).
+  locked?: boolean
   company: Company
   members: Member[]
   projects: Project[]
