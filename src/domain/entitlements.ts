@@ -69,3 +69,12 @@ export function blockedWrite(state: CompanyState, list: SubscriptionList | undef
   }
   return undefined
 }
+
+// Whether an organization can still add a project or a person: always when it is free, paid or in
+// its grace period; within the free plan's limits otherwise. Used to offer an upgrade at the limit.
+export function room(state: CompanyState, list: SubscriptionList | undefined, today?: string): { projects: boolean; people: boolean } {
+  if (entitlement(list, state.company.id, today) !== 'unpaid') return { projects: true, people: true }
+  // An organization already over the free plan is read-only, so it has room for nothing.
+  const within = withinFreeTier(state)
+  return { projects: within && state.projects.length < FREE_PROJECTS, people: within && state.members.length < FREE_PEOPLE }
+}

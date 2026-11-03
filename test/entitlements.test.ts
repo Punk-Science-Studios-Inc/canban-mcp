@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { finalizeEvent, generateSecretKey } from 'nostr-tools/pure'
 import * as commands from '../src/domain/commands'
-import { addDays, blockedWrite, entitlement, subscriptionListOf, type SubscriptionList } from '../src/domain/entitlements'
+import { addDays, blockedWrite, entitlement, room, subscriptionListOf, type SubscriptionList } from '../src/domain/entitlements'
 import { OPERATOR, type CompanyState } from '../src/domain/model'
 
 const org = `${'a'.repeat(64)}.x1`
@@ -54,5 +54,12 @@ describe('blockedWrite', () => {
 
   it('does not limit paid or grace-period organizations', () => {
     expect(blockedWrite(state(5, 9), list, newProject, '2026-12-05')).toBeUndefined()
+  })
+
+  it('reports room left on the free plan, and unlimited room when paid', () => {
+    expect(room(state(0, 1), undefined)).toEqual({ projects: true, people: true })
+    expect(room(state(1, 3), undefined)).toEqual({ projects: false, people: false })
+    expect(room(state(2, 2), undefined)).toEqual({ projects: false, people: false })
+    expect(room(state(1, 3), list, '2026-11-15')).toEqual({ projects: true, people: true })
   })
 })
