@@ -45105,6 +45105,7 @@ function accessTags(address, content) {
   if (address.type === "project" && Array.isArray(content.members)) {
     for (const pk of content.members) if (typeof pk === "string") tags.push(["p", pk]);
   }
+  if (address.type === "company" && typeof content.invite === "string" && content.invite) tags.push(["invite", inviteHash(content.invite)]);
   if (content.removed === true) tags.push(["removed"]);
   return tags;
 }
@@ -45114,6 +45115,7 @@ function template(address, content, createdAt, key) {
   if (!key) return { kind: KIND, created_at: createdAt, tags, content: JSON.stringify(content) };
   return { kind: KIND, created_at: createdAt, tags: [...tags, ["k", key.kid]], content: seal(content, d, key) };
 }
+var inviteHash = (code) => bytesToHex(sha256(new TextEncoder().encode(code)));
 function newId() {
   const bytes = crypto.getRandomValues(new Uint8Array(8));
   return Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
@@ -45168,6 +45170,119 @@ function blockedWrite(state, list, write2, today) {
     return `Adding another person needs a subscription. ${limits}`;
   }
   return void 0;
+}
+
+// src/domain/order.ts
+var STEP = 1024;
+function between(before, after) {
+  if (before === void 0 && after === void 0) return STEP;
+  if (before === void 0) return after - STEP;
+  if (after === void 0) return before + STEP;
+  return (before + after) / 2;
+}
+
+// src/domain/commands.ts
+function writable(project) {
+  if (project.locked) throw new Error("This project can't be changed from here yet.");
+}
+function checkBody(body) {
+  if (body && new TextEncoder().encode(body).length > MAX_TASK_BODY_BYTES) throw new Error("The description is too long.");
+}
+function write(address, content) {
+  return { address, content };
+}
+function companyWrite(state, patch) {
+  const content = { name: state.company.name, holders: state.holders, invite: state.invite, ...patch };
+  if (!content.holders) delete content.holders;
+  if (!content.invite) delete content.invite;
+  return write({ type: "company", companyId: state.company.id }, content);
+}
+function setMember(companyId, pubkey, role, name) {
+  return [write({ type: "member", companyId, pubkey }, { role, ...name ? { name } : {} })];
+}
+function createLane(companyId, projectId, name, after) {
+  return [write({ type: "lane", companyId, projectId, laneId: newId() }, { name, order: between(after?.order, void 0) })];
+}
+function updateLane(companyId, lane, patch) {
+  return [write({ type: "lane", companyId, projectId: lane.projectId, laneId: lane.id }, { name: lane.name, order: lane.order, ...patch })];
+}
+function createTask(project, lane, title, last, extra = {}) {
+  writable(project);
+  checkBody(extra.body);
+  const taskId = newId();
+  const number4 = project.nextNumber;
+  return {
+    taskId,
+    number: number4,
+    writes: [
+      write(
+        { type: "task", companyId: project.companyId, projectId: project.id, taskId },
+        { lane, title, body: extra.body ?? "", order: between(last?.order, void 0), labels: extra.labels ?? [], assignee: extra.assignee, number: number4, dependsOn: extra.dependsOn ?? [] }
+      )
+    ]
+  };
+}
+function updateTask(companyId, task, patch) {
+  checkBody(patch.body);
+  const { lane, title, body, order, assignee, labels, number: number4, dependsOn } = task;
+  return [write({ type: "task", companyId, projectId: task.projectId, taskId: task.id }, { lane, title, body, order, assignee, labels, number: number4, dependsOn, ...patch })];
+}
+function isDone(state, task) {
+  return lanesOf(state, task.projectId).at(-1)?.id === task.lane;
+}
+function blockers(state, task) {
+  return task.dependsOn.map((id) => state.tasks.find((t) => t.id === id)).filter((t) => !!t && !isDone(state, t));
+}
+function dependents(state, task) {
+  return state.tasks.filter((t) => t.dependsOn.includes(task.id));
+}
+function createsCycle(state, task, on) {
+  const byId = new Map(state.tasks.map((t) => [t.id, t]));
+  const seen = /* @__PURE__ */ new Set();
+  const stack = [on];
+  while (stack.length) {
+    const id = stack.pop();
+    if (id === task.id) return true;
+    if (seen.has(id)) continue;
+    seen.add(id);
+    stack.push(...byId.get(id)?.dependsOn ?? []);
+  }
+  return false;
+}
+function renumberings(state, me2) {
+  const writes = [];
+  for (const project of state.projects) {
+    const byNumber = /* @__PURE__ */ new Map();
+    for (const t of tasksOf(state, project.id)) {
+      if (t.number === void 0) continue;
+      byNumber.set(t.number, [...byNumber.get(t.number) ?? [], t]);
+    }
+    let next = project.nextNumber;
+    for (const group2 of byNumber.values()) {
+      if (group2.length < 2) continue;
+      group2.sort((a, b) => a.createdAt - b.createdAt || a.id.localeCompare(b.id));
+      for (const loser of group2.slice(1)) {
+        if (loser.createdBy === me2) writes.push(...updateTask(state.company.id, loser, { number: next++ }));
+      }
+    }
+  }
+  return writes;
+}
+function retaggings(state, me2) {
+  if (state.locked || !isAdmin(state, me2)) return [];
+  return state.members.filter((m) => m.untagged && m.role !== "owner").flatMap((m) => setMember(state.company.id, m.pubkey, m.role, m.name));
+}
+function lanesOf(state, projectId) {
+  return state.lanes.filter((l) => l.projectId === projectId);
+}
+function tasksOf(state, projectId) {
+  return state.tasks.filter((t) => t.projectId === projectId);
+}
+function tasksInLane(state, laneId) {
+  return state.tasks.filter((t) => t.lane === laneId);
+}
+function canWrite(state, project, pubkey) {
+  return state.members.some((m) => m.pubkey === pubkey && m.role !== "member") || project.members.includes(pubkey);
 }
 
 // src/domain/keys.ts
@@ -45295,12 +45410,8 @@ function rotation(state, keyrings, me2) {
   const history = new Map(keyrings.keys.get(state.company.id) ?? []);
   history.set(key.kid, key.key);
   const people = recipients(state);
-  return { key, history, company: companyWrite(state, people), recipients: people };
+  return { key, history, company: companyWrite(state, { holders: people }), recipients: people };
 }
-var companyWrite = (state, holders) => ({
-  address: { type: "company", companyId: state.company.id },
-  content: { name: state.company.name, holders }
-});
 
 // src/domain/profile.ts
 var profileD = (pubkey) => `canban:profile:${pubkey}`;
@@ -45315,6 +45426,8 @@ function canbanFilters(me2, companyIds, people) {
     // My own writes: organizations I own, my profile.
     { ...base, authors: [me2] },
     ...[...new Set(companyIds)].sort().map((c) => ({ ...base, "#c": [c] })),
+    // Join requests, which the relay shows only to admins (src/domain/requests.ts).
+    ...new Set(companyIds).size ? [{ ...base, "#r": [...new Set(companyIds)].sort() }] : [],
     // The keyring is rarely rewritten, so the authors filter (newest first, capped) can miss it.
     { ...base, "#d": [SUBSCRIPTIONS_D, keyringD(me2)] },
     ...profiles.length ? [{ ...base, "#d": profiles }] : []
@@ -45491,7 +45604,7 @@ function resolveCompany(companyId, ce, keyring2) {
   tasks.sort(byOrder);
   const projectOf2 = new Map(tasks.map((t) => [t.id, t.projectId]));
   for (const t of tasks) t.dependsOn = [...new Set(t.dependsOn)].filter((id) => id !== t.id && projectOf2.get(id) === t.projectId);
-  return { locked: companyLocked, kid, kidAt: kid ? companyEvent.created_at : void 0, ...kid ? { holders } : {}, ...rotationDue ? { rotationDue: true } : {}, company: { id: companyId, owner, name: company.name }, members: members2, projects, lanes, tasks };
+  return { locked: companyLocked, kid, kidAt: kid ? companyEvent.created_at : void 0, ...kid ? { holders } : {}, ...typeof read?.invite === "string" && read.invite ? { invite: read.invite } : {}, ...rotationDue ? { rotationDue: true } : {}, company: { id: companyId, owner, name: company.name }, members: members2, projects, lanes, tasks };
 }
 function holdersOf(versions, kid, admins, keyring2) {
   const holders = /* @__PURE__ */ new Set();
@@ -45522,116 +45635,6 @@ function resolveRoles(owner, versions, keyring2) {
 }
 function byOrder(a, b) {
   return a.order - b.order || a.id.localeCompare(b.id);
-}
-
-// src/domain/order.ts
-var STEP = 1024;
-function between(before, after) {
-  if (before === void 0 && after === void 0) return STEP;
-  if (before === void 0) return after - STEP;
-  if (after === void 0) return before + STEP;
-  return (before + after) / 2;
-}
-
-// src/domain/commands.ts
-function writable(project) {
-  if (project.locked) throw new Error("This project can't be changed from here yet.");
-}
-function checkBody(body) {
-  if (body && new TextEncoder().encode(body).length > MAX_TASK_BODY_BYTES) throw new Error("The description is too long.");
-}
-function write(address, content) {
-  return { address, content };
-}
-function renameCompany(companyId, name, holders) {
-  return [write({ type: "company", companyId }, { name, ...holders ? { holders } : {} })];
-}
-function setMember(companyId, pubkey, role, name) {
-  return [write({ type: "member", companyId, pubkey }, { role, ...name ? { name } : {} })];
-}
-function createLane(companyId, projectId, name, after) {
-  return [write({ type: "lane", companyId, projectId, laneId: newId() }, { name, order: between(after?.order, void 0) })];
-}
-function updateLane(companyId, lane, patch) {
-  return [write({ type: "lane", companyId, projectId: lane.projectId, laneId: lane.id }, { name: lane.name, order: lane.order, ...patch })];
-}
-function createTask(project, lane, title, last, extra = {}) {
-  writable(project);
-  checkBody(extra.body);
-  const taskId = newId();
-  const number4 = project.nextNumber;
-  return {
-    taskId,
-    number: number4,
-    writes: [
-      write(
-        { type: "task", companyId: project.companyId, projectId: project.id, taskId },
-        { lane, title, body: extra.body ?? "", order: between(last?.order, void 0), labels: extra.labels ?? [], assignee: extra.assignee, number: number4, dependsOn: extra.dependsOn ?? [] }
-      )
-    ]
-  };
-}
-function updateTask(companyId, task, patch) {
-  checkBody(patch.body);
-  const { lane, title, body, order, assignee, labels, number: number4, dependsOn } = task;
-  return [write({ type: "task", companyId, projectId: task.projectId, taskId: task.id }, { lane, title, body, order, assignee, labels, number: number4, dependsOn, ...patch })];
-}
-function isDone(state, task) {
-  return lanesOf(state, task.projectId).at(-1)?.id === task.lane;
-}
-function blockers(state, task) {
-  return task.dependsOn.map((id) => state.tasks.find((t) => t.id === id)).filter((t) => !!t && !isDone(state, t));
-}
-function dependents(state, task) {
-  return state.tasks.filter((t) => t.dependsOn.includes(task.id));
-}
-function createsCycle(state, task, on) {
-  const byId = new Map(state.tasks.map((t) => [t.id, t]));
-  const seen = /* @__PURE__ */ new Set();
-  const stack = [on];
-  while (stack.length) {
-    const id = stack.pop();
-    if (id === task.id) return true;
-    if (seen.has(id)) continue;
-    seen.add(id);
-    stack.push(...byId.get(id)?.dependsOn ?? []);
-  }
-  return false;
-}
-function renumberings(state, me2) {
-  const writes = [];
-  for (const project of state.projects) {
-    const byNumber = /* @__PURE__ */ new Map();
-    for (const t of tasksOf(state, project.id)) {
-      if (t.number === void 0) continue;
-      byNumber.set(t.number, [...byNumber.get(t.number) ?? [], t]);
-    }
-    let next = project.nextNumber;
-    for (const group2 of byNumber.values()) {
-      if (group2.length < 2) continue;
-      group2.sort((a, b) => a.createdAt - b.createdAt || a.id.localeCompare(b.id));
-      for (const loser of group2.slice(1)) {
-        if (loser.createdBy === me2) writes.push(...updateTask(state.company.id, loser, { number: next++ }));
-      }
-    }
-  }
-  return writes;
-}
-function retaggings(state, me2) {
-  if (state.locked || !isAdmin(state, me2)) return [];
-  return state.members.filter((m) => m.untagged && m.role !== "owner").flatMap((m) => setMember(state.company.id, m.pubkey, m.role, m.name));
-}
-function lanesOf(state, projectId) {
-  return state.lanes.filter((l) => l.projectId === projectId);
-}
-function tasksOf(state, projectId) {
-  return state.tasks.filter((t) => t.projectId === projectId);
-}
-function tasksInLane(state, laneId) {
-  return state.tasks.filter((t) => t.lane === laneId);
-}
-function canWrite(state, project, pubkey) {
-  return state.members.some((m) => m.pubkey === pubkey && m.role !== "member") || project.members.includes(pubkey);
 }
 
 // src/domain/keychain.ts
@@ -45818,7 +45821,7 @@ var Keychain = class {
     const missing = state.members.map((m) => m.pubkey).filter((pk) => !holders.includes(pk));
     const key = this.keyFor(state);
     if (missing.length) {
-      const [{ address, content }] = renameCompany(id, state.company.name, [...holders, ...missing]);
+      const { address, content } = companyWrite(state, { holders: [...holders, ...missing] });
       await this.publish(template(address, content, this.host.nextTimestamp(`canban:company:${id}`), key));
     }
     const history = this.keyrings.keys.get(id);
@@ -45935,7 +45938,7 @@ var Board = class {
       nextTimestamp: (d) => this.nextTimestamp(d),
       nextTimestampIn: (companyId) => {
         let newest = 0;
-        for (const [d, at] of this.newestByD) if (d.includes(`:${companyId}`)) newest = Math.max(newest, at);
+        for (const [d, at] of this.newestByD) if (d.includes(`:${companyId}`) && !d.startsWith("canban:request:")) newest = Math.max(newest, at);
         return Math.max(Math.floor(Date.now() / 1e3), newest + 1);
       },
       setKeys: (keys) => this.keys = keys,

@@ -1,7 +1,7 @@
 import type { EventTemplate, NostrEvent } from 'nostr-tools'
 import { bytesToHex, hexToBytes } from '@noble/hashes/utils.js'
 import { kidOf, orgKey, type Keyring, type OrgKey } from './crypto'
-import type { Write } from './commands'
+import { companyWrite, type Write } from './commands'
 import { APP_TAG, KIND, isAdmin, ownerOf, type CompanyState } from './model'
 
 // How an organization's key reaches its members without anyone seeing it (docs/encryption.md):
@@ -191,7 +191,7 @@ export function rotation(state: CompanyState, keyrings: Keyrings, me: string): {
   const history: Keyring = new Map(keyrings.keys.get(state.company.id) ?? [])
   history.set(key.kid, key.key)
   const people = recipients(state)
-  return { key, history, company: companyWrite(state, people), recipients: people }
+  return { key, history, company: companyWrite(state, { holders: people }), recipients: people }
 }
 
 // Handing the current key to someone new: they join the holders on the company event (written with
@@ -200,10 +200,6 @@ export function rotation(state: CompanyState, keyrings: Keyrings, me: string): {
 export function addHolder(state: CompanyState, me: string, pubkey: string): Write | undefined {
   if (!state.kid || state.locked || !isAdmin(state, me)) return undefined
   const holders = state.holders ?? []
-  return holders.includes(pubkey) ? undefined : companyWrite(state, [...holders, pubkey])
+  return holders.includes(pubkey) ? undefined : companyWrite(state, { holders: [...holders, pubkey] })
 }
 
-const companyWrite = (state: CompanyState, holders: string[]): Write => ({
-  address: { type: 'company', companyId: state.company.id },
-  content: { name: state.company.name, holders },
-})

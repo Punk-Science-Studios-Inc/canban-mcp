@@ -134,7 +134,7 @@ describe('key rotation state', () => {
 
   it('keeps the holders through a rename', () => {
     const { companyId, events } = org()
-    events.push(...sign(commands.renameCompany(companyId, 'Renamed', resolve(events, keyring).get(companyId)!.holders)))
+    events.push(...sign(commands.renameCompany(resolve(events, keyring).get(companyId)!, 'Renamed')))
     events.push(...byAlice(commands.setMember(companyId, bob, 'removed')))
     const state = resolve(newestOnly(events), keyring).get(companyId)!
     expect(state.company.name).toBe('Renamed')
@@ -159,7 +159,7 @@ describe('key rotation state', () => {
 
   it('ignores an admin’s plaintext company event: no downgrade, no hiding', () => {
     const { companyId, events } = org()
-    events.push(...byAlice(commands.renameCompany(companyId, ''), null))
+    events.push(...byAlice(commands.renameCompany(resolve(events, keyring).get(companyId)!, ''), null))
     const state = resolve(events, keyring).get(companyId)!
     expect(state.kid).toBe(key.kid)
     expect(state.company.name).toBe('Rotate Co')
