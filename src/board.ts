@@ -1,5 +1,6 @@
-import { SimplePool, type NostrEvent } from 'nostr-tools'
-import { useWebSocketImplementation } from 'nostr-tools/pool'
+import type { NostrEvent } from 'nostr-tools'
+// Pool and WebSocket setting from the same module: the 'nostr-tools' entry bundles its own copy.
+import { SimplePool, useWebSocketImplementation } from 'nostr-tools/pool'
 import WebSocket from 'ws'
 import { finalizeEvent, getPublicKey } from 'nostr-tools/pure'
 import { dOf, template } from './domain/entities'
