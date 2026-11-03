@@ -4,7 +4,8 @@ import { SimplePool, useWebSocketImplementation } from 'nostr-tools/pool'
 import WebSocket from 'ws'
 import { finalizeEvent, getPublicKey } from 'nostr-tools/pure'
 import { dOf, template } from './domain/entities'
-import { APP_TAG, KIND, visibilityKey, type CompanyState } from './domain/model'
+import { visibilityKey, type CompanyState } from './domain/model'
+import { canbanFilters, companiesNaming } from './domain/subscription'
 import { resolve } from './domain/resolve'
 import { renumberings, type Write } from './domain/commands'
 import { blockedWrite, subscriptionListOf, type SubscriptionList } from './domain/entitlements'
@@ -39,6 +40,9 @@ export class Board {
   private closed = false
   private me: string
   private visible = ''
+  // Organizations events show this agent is in; the subscription asks for each separately (the
+  // relay caps results per filter before filtering them per agent).
+  private known = new Set<string>()
   private recheck?: ReturnType<typeof setTimeout>
 
   constructor(
@@ -50,14 +54,26 @@ export class Board {
     this.pool.automaticallyAuth = () => (event) => Promise.resolve(finalizeEvent(event, this.secret))
   }
 
+  private subscriptionKey(): string {
+    return `${visibilityKey(this.companies(), this.me)}|${[...this.known].sort().join(',')}`
+  }
+
   start(): void {
-    this.sub = this.pool.subscribe([this.relay], { kinds: [KIND], '#t': [APP_TAG] }, {
+    const openedFor = this.subscriptionKey()
+    const filters = canbanFilters(this.me, this.known, [])
+    this.sub = this.pool.subscribeMap(filters.map((filter) => ({ url: this.relay, filter })), {
       onauth: async (event) => finalizeEvent(event, this.secret),
       onevent: (event) => this.add(event),
       oneose: () => {
         this.connection = 'live'
+        this.visible = this.subscriptionKey()
+        // Learned of organizations the subscription didn't cover yet: ask again before counting as loaded.
+        if (this.visible !== openedFor) {
+          this.sub?.close()
+          this.start()
+          return
+        }
         this.loadedAt = Date.now()
-        this.visible = visibilityKey(this.companies(), this.me)
         this.markLoaded()
       },
       onclose: (reasons) => {
@@ -139,6 +155,7 @@ export class Board {
     this.events.set(event.id, event)
     const d = event.tags.find((t) => t[0] === 'd')?.[1]
     if (d) this.newestByD.set(d, Math.max(this.newestByD.get(d) ?? 0, event.created_at))
+    for (const c of companiesNaming(this.me, event)) this.known.add(c)
     if (this.loaded) this.scheduleRecheck()
   }
 
@@ -148,7 +165,7 @@ export class Board {
     clearTimeout(this.recheck)
     this.recheck = setTimeout(() => {
       void this.healNumbers()
-      const key = visibilityKey(this.companies(), this.me)
+      const key = this.subscriptionKey()
       if (key === this.visible || this.closed) return
       this.visible = key
       this.sub?.close()

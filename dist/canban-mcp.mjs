@@ -45117,6 +45117,80 @@ function newId() {
   return Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
 }
 
+// src/domain/entitlements.ts
+var BILLING = "33d4228191df2857292cb601c65a978a9adfac4f1fd044d3616202af922b4642";
+var SUBSCRIPTIONS_D = "canban/subscriptions";
+var GRACE_DAYS = 7;
+var FREE_PROJECTS = 1;
+var FREE_PEOPLE = 3;
+function entitlement(list, companyId, today = (/* @__PURE__ */ new Date()).toISOString().slice(0, 10)) {
+  if (ownerOf(companyId) === OPERATOR) return "free";
+  const paidUntil = list?.orgs[companyId]?.paidUntil;
+  if (!paidUntil) return "unpaid";
+  if (today <= paidUntil) return "paid";
+  return today <= addDays(paidUntil, GRACE_DAYS) ? "grace" : "unpaid";
+}
+function addDays(date5, days) {
+  const d = /* @__PURE__ */ new Date(`${date5}T00:00:00Z`);
+  d.setUTCDate(d.getUTCDate() + days);
+  return d.toISOString().slice(0, 10);
+}
+function subscriptionListOf(events) {
+  let newest;
+  for (const e of events) {
+    if (e.pubkey !== BILLING || e.tags.find((t) => t[0] === "d")?.[1] !== SUBSCRIPTIONS_D) continue;
+    if (!newest || e.created_at > newest.created_at) newest = e;
+  }
+  try {
+    const list = newest && JSON.parse(newest.content);
+    return list && typeof list.orgs === "object" ? list : void 0;
+  } catch {
+    return void 0;
+  }
+}
+function withinFreeTier(state) {
+  return state.projects.length <= FREE_PROJECTS && state.members.length <= FREE_PEOPLE;
+}
+function blockedWrite(state, list, write2, today) {
+  if (entitlement(list, state.company.id, today) !== "unpaid") return void 0;
+  const { address, content } = write2;
+  const removing = "removed" in content && content.removed || "role" in content && content.role === "removed";
+  if (removing) return void 0;
+  const limits = `The free plan covers ${FREE_PROJECTS} project and ${FREE_PEOPLE} people. The organization owner can subscribe under Plan & billing.`;
+  if (!withinFreeTier(state)) return `This organization is read-only: it is over the free plan. ${limits}`;
+  if (address.type === "project" && !state.projects.some((p) => p.id === address.projectId) && state.projects.length >= FREE_PROJECTS) {
+    return `Adding another project needs a subscription. ${limits}`;
+  }
+  if (address.type === "member" && !state.members.some((m) => m.pubkey === address.pubkey) && state.members.length >= FREE_PEOPLE) {
+    return `Adding another person needs a subscription. ${limits}`;
+  }
+  return void 0;
+}
+
+// src/domain/profile.ts
+var profileD = (pubkey) => `canban:profile:${pubkey}`;
+
+// src/domain/subscription.ts
+function canbanFilters(me2, companyIds, people) {
+  const base = { kinds: [KIND], "#t": [APP_TAG] };
+  const profiles = [...new Set(people)].map(profileD);
+  return [
+    // Member events and project assignments name me with a p tag: they reveal my organizations.
+    { ...base, "#p": [me2] },
+    // My own writes: organizations I own, my profile.
+    { ...base, authors: [me2] },
+    ...[...new Set(companyIds)].sort().map((c) => ({ ...base, "#c": [c] })),
+    { ...base, "#d": [SUBSCRIPTIONS_D] },
+    ...profiles.length ? [{ ...base, "#d": profiles }] : []
+  ];
+}
+function companiesNaming(me2, event) {
+  const c = event.tags.find((t) => t[0] === "c")?.[1];
+  if (!c) return [];
+  const namesMe = event.pubkey === me2 || event.tags.some((t) => t[0] === "p" && t[1] === me2);
+  return namesMe ? [c] : [];
+}
+
 // src/domain/resolve.ts
 var MAX_ROLE_PASSES = 8;
 function resolve(events, keyring) {
@@ -45392,56 +45466,6 @@ function canWrite(state, project, pubkey) {
   return state.members.some((m) => m.pubkey === pubkey && m.role !== "member") || project.members.includes(pubkey);
 }
 
-// src/domain/entitlements.ts
-var BILLING = "33d4228191df2857292cb601c65a978a9adfac4f1fd044d3616202af922b4642";
-var SUBSCRIPTIONS_D = "canban/subscriptions";
-var GRACE_DAYS = 7;
-var FREE_PROJECTS = 1;
-var FREE_PEOPLE = 3;
-function entitlement(list, companyId, today = (/* @__PURE__ */ new Date()).toISOString().slice(0, 10)) {
-  if (ownerOf(companyId) === OPERATOR) return "free";
-  const paidUntil = list?.orgs[companyId]?.paidUntil;
-  if (!paidUntil) return "unpaid";
-  if (today <= paidUntil) return "paid";
-  return today <= addDays(paidUntil, GRACE_DAYS) ? "grace" : "unpaid";
-}
-function addDays(date5, days) {
-  const d = /* @__PURE__ */ new Date(`${date5}T00:00:00Z`);
-  d.setUTCDate(d.getUTCDate() + days);
-  return d.toISOString().slice(0, 10);
-}
-function subscriptionListOf(events) {
-  let newest;
-  for (const e of events) {
-    if (e.pubkey !== BILLING || e.tags.find((t) => t[0] === "d")?.[1] !== SUBSCRIPTIONS_D) continue;
-    if (!newest || e.created_at > newest.created_at) newest = e;
-  }
-  try {
-    const list = newest && JSON.parse(newest.content);
-    return list && typeof list.orgs === "object" ? list : void 0;
-  } catch {
-    return void 0;
-  }
-}
-function withinFreeTier(state) {
-  return state.projects.length <= FREE_PROJECTS && state.members.length <= FREE_PEOPLE;
-}
-function blockedWrite(state, list, write2, today) {
-  if (entitlement(list, state.company.id, today) !== "unpaid") return void 0;
-  const { address, content } = write2;
-  const removing = "removed" in content && content.removed || "role" in content && content.role === "removed";
-  if (removing) return void 0;
-  const limits = `The free plan covers ${FREE_PROJECTS} project and ${FREE_PEOPLE} people. The organization owner can subscribe under Plan & billing.`;
-  if (!withinFreeTier(state)) return `This organization is read-only: it is over the free plan. ${limits}`;
-  if (address.type === "project" && !state.projects.some((p) => p.id === address.projectId) && state.projects.length >= FREE_PROJECTS) {
-    return `Adding another project needs a subscription. ${limits}`;
-  }
-  if (address.type === "member" && !state.members.some((m) => m.pubkey === address.pubkey) && state.members.length >= FREE_PEOPLE) {
-    return `Adding another person needs a subscription. ${limits}`;
-  }
-  return void 0;
-}
-
 // src/board.ts
 var READY_TIMEOUT = 1e4;
 var RETRY_MS = 3e3;
@@ -45475,15 +45499,28 @@ var Board = class {
   closed = false;
   me;
   visible = "";
+  // Organizations events show this agent is in; the subscription asks for each separately (the
+  // relay caps results per filter before filtering them per agent).
+  known = /* @__PURE__ */ new Set();
   recheck;
+  subscriptionKey() {
+    return `${visibilityKey(this.companies(), this.me)}|${[...this.known].sort().join(",")}`;
+  }
   start() {
-    this.sub = this.pool.subscribe([this.relay], { kinds: [KIND], "#t": [APP_TAG] }, {
+    const openedFor = this.subscriptionKey();
+    const filters = canbanFilters(this.me, this.known, []);
+    this.sub = this.pool.subscribeMap(filters.map((filter) => ({ url: this.relay, filter })), {
       onauth: async (event) => finalizeEvent2(event, this.secret),
       onevent: (event) => this.add(event),
       oneose: () => {
         this.connection = "live";
+        this.visible = this.subscriptionKey();
+        if (this.visible !== openedFor) {
+          this.sub?.close();
+          this.start();
+          return;
+        }
         this.loadedAt = Date.now();
-        this.visible = visibilityKey(this.companies(), this.me);
         this.markLoaded();
       },
       onclose: (reasons) => {
@@ -45558,6 +45595,7 @@ var Board = class {
     this.events.set(event.id, event);
     const d = event.tags.find((t) => t[0] === "d")?.[1];
     if (d) this.newestByD.set(d, Math.max(this.newestByD.get(d) ?? 0, event.created_at));
+    for (const c of companiesNaming(this.me, event)) this.known.add(c);
     if (this.loaded) this.scheduleRecheck();
   }
   // The relay only serves what this agent may see, so gaining a company or project means
@@ -45566,7 +45604,7 @@ var Board = class {
     clearTimeout(this.recheck);
     this.recheck = setTimeout(() => {
       void this.healNumbers();
-      const key = visibilityKey(this.companies(), this.me);
+      const key = this.subscriptionKey();
       if (key === this.visible || this.closed) return;
       this.visible = key;
       this.sub?.close();
