@@ -20,6 +20,8 @@ export interface Member {
   pubkey: string
   role: Role
   name?: string
+  // Their member event predates the p tag, so their client can't find this organization by it.
+  untagged?: true
 }
 
 export interface Project {

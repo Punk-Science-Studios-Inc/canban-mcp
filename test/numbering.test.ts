@@ -65,3 +65,18 @@ describe('ticket numbers', () => {
     expect(commands.renumberings(healed, alice)).toEqual([])
   })
 })
+
+describe('old member events', () => {
+  it('are re-tagged by an admin so the member can find the organization', () => {
+    const { companyId, events } = setup()
+    // A member event written before access tags: no p or role tag.
+    const old = finalizeEvent({ ...template({ type: 'member', companyId, pubkey: alice }, { role: 'member', name: 'Alice' }, clock++), tags: [['d', `canban:member:${companyId}:${alice}`], ['t', 'canban'], ['c', companyId]] }, ownerKey)
+    events.push(old)
+    expect(state(events, companyId).members.find((m) => m.pubkey === alice)?.untagged).toBe(true)
+    expect(commands.retaggings(state(events, companyId), alice)).toEqual([])
+    const fix = commands.retaggings(state(events, companyId), owner)
+    expect(fix).toEqual(commands.setMember(companyId, alice, 'member', 'Alice'))
+    events.push(...sign(fix))
+    expect(commands.retaggings(state(events, companyId), owner)).toEqual([])
+  })
+})

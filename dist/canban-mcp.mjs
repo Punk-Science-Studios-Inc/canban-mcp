@@ -45269,7 +45269,8 @@ function memberEntry(event, keyring) {
   const read = open2(event, keyring);
   const roleTag = tag(event, "role");
   const role = validRole(roleTag ? roleTag[1] : isEncrypted(event) ? void 0 : read?.role);
-  return role ? { role, name: typeof read?.name === "string" ? read.name : void 0 } : void 0;
+  const untagged = !event.tags.some((t) => t[0] === "p" && t[1]) || void 0;
+  return role ? { role, name: typeof read?.name === "string" ? read.name : void 0, untagged } : void 0;
 }
 var hasAccessTags = (event) => isEncrypted(event) || event.tags.some((t) => t[0] === "role" || t[0] === "removed" || t[0] === "p" && !!t[1]);
 function resolveCompany(companyId, ce, keyring) {
@@ -45284,7 +45285,7 @@ function resolveCompany(companyId, ce, keyring) {
   const ownerEntry = memberEntry(latest(ce.members.get(owner) ?? [], (pk) => pk === owner), keyring);
   const members2 = [{ pubkey: owner, role: "owner", name: ownerEntry?.name }];
   for (const [pubkey, entry] of roles) {
-    if (entry.role !== "removed") members2.push({ pubkey, role: entry.role, name: entry.name });
+    if (entry.role !== "removed") members2.push({ pubkey, role: entry.role, name: entry.name, ...entry.untagged ? { untagged: true } : {} });
   }
   const memberSet = new Set(members2.map((m) => m.pubkey));
   const admins = new Set(members2.filter((m) => m.role !== "member").map((m) => m.pubkey));
@@ -45385,6 +45386,9 @@ function checkBody(body) {
 function write(address, content) {
   return { address, content };
 }
+function setMember(companyId, pubkey, role, name) {
+  return [write({ type: "member", companyId, pubkey }, { role, ...name ? { name } : {} })];
+}
 function createLane(companyId, projectId, name, after) {
   return [write({ type: "lane", companyId, projectId, laneId: newId() }, { name, order: between(after?.order, void 0) })];
 }
@@ -45453,6 +45457,10 @@ function renumberings(state, me2) {
   }
   return writes;
 }
+function retaggings(state, me2) {
+  if (state.locked || !isAdmin(state, me2)) return [];
+  return state.members.filter((m) => m.untagged && m.role !== "owner").flatMap((m) => setMember(state.company.id, m.pubkey, m.role, m.name));
+}
 function lanesOf(state, projectId) {
   return state.lanes.filter((l) => l.projectId === projectId);
 }
@@ -45499,6 +45507,8 @@ var Board = class {
   closed = false;
   me;
   visible = "";
+  // Counts subscriptions; callbacks from one already closed (nostr-tools fires oneose on close) are ignored.
+  generation = 0;
   // Organizations events show this agent is in; the subscription asks for each separately (the
   // relay caps results per filter before filtering them per agent).
   known = /* @__PURE__ */ new Set();
@@ -45508,11 +45518,14 @@ var Board = class {
   }
   start() {
     const openedFor = this.subscriptionKey();
+    const generation = ++this.generation;
+    const current = () => !this.closed && generation === this.generation;
     const filters = canbanFilters(this.me, this.known, []);
     this.sub = this.pool.subscribeMap(filters.map((filter) => ({ url: this.relay, filter })), {
       onauth: async (event) => finalizeEvent2(event, this.secret),
       onevent: (event) => this.add(event),
       oneose: () => {
+        if (!current()) return;
         this.connection = "live";
         this.visible = this.subscriptionKey();
         if (this.visible !== openedFor) {
@@ -45525,7 +45538,7 @@ var Board = class {
       },
       onclose: (reasons) => {
         const reason = reasons.map((r) => r.reason).join("; ");
-        if (this.closed || reason.includes("closed by caller")) return;
+        if (!current() || reason.includes("closed by caller")) return;
         this.lastError = reason;
         this.connection = /restricted|auth-required/i.test(reason) ? "denied" : "offline";
         this.markLoaded();
@@ -45614,7 +45627,7 @@ var Board = class {
   healing = false;
   async healNumbers() {
     if (this.healing || this.connection !== "live") return;
-    const writes = [...this.companies().values()].flatMap((state) => renumberings(state, this.me));
+    const writes = [...this.companies().values()].flatMap((state) => [...renumberings(state, this.me), ...retaggings(state, this.me)]);
     if (!writes.length) return;
     this.healing = true;
     try {

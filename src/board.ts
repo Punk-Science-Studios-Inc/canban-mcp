@@ -7,7 +7,7 @@ import { dOf, template } from './domain/entities'
 import { visibilityKey, type CompanyState } from './domain/model'
 import { canbanFilters, companiesNaming } from './domain/subscription'
 import { resolve } from './domain/resolve'
-import { renumberings, type Write } from './domain/commands'
+import { renumberings, retaggings, type Write } from './domain/commands'
 import { blockedWrite, subscriptionListOf, type SubscriptionList } from './domain/entitlements'
 
 export type Connection = 'connecting' | 'live' | 'denied' | 'offline'
@@ -40,6 +40,8 @@ export class Board {
   private closed = false
   private me: string
   private visible = ''
+  // Counts subscriptions; callbacks from one already closed (nostr-tools fires oneose on close) are ignored.
+  private generation = 0
   // Organizations events show this agent is in; the subscription asks for each separately (the
   // relay caps results per filter before filtering them per agent).
   private known = new Set<string>()
@@ -60,11 +62,14 @@ export class Board {
 
   start(): void {
     const openedFor = this.subscriptionKey()
+    const generation = ++this.generation
+    const current = () => !this.closed && generation === this.generation
     const filters = canbanFilters(this.me, this.known, [])
     this.sub = this.pool.subscribeMap(filters.map((filter) => ({ url: this.relay, filter })), {
       onauth: async (event) => finalizeEvent(event, this.secret),
       onevent: (event) => this.add(event),
       oneose: () => {
+        if (!current()) return
         this.connection = 'live'
         this.visible = this.subscriptionKey()
         // Learned of organizations the subscription didn't cover yet: ask again before counting as loaded.
@@ -78,7 +83,7 @@ export class Board {
       },
       onclose: (reasons) => {
         const reason = reasons.map((r) => r.reason).join('; ')
-        if (this.closed || reason.includes('closed by caller')) return
+        if (!current() || reason.includes('closed by caller')) return
         this.lastError = reason
         this.connection = /restricted|auth-required/i.test(reason) ? 'denied' : 'offline'
         this.markLoaded()
@@ -177,7 +182,7 @@ export class Board {
 
   private async healNumbers(): Promise<void> {
     if (this.healing || this.connection !== 'live') return
-    const writes = [...this.companies().values()].flatMap((state) => renumberings(state, this.me))
+    const writes = [...this.companies().values()].flatMap((state) => [...renumberings(state, this.me), ...retaggings(state, this.me)])
     if (!writes.length) return
     this.healing = true
     try {
