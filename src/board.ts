@@ -4,9 +4,10 @@ import { SimplePool, useWebSocketImplementation } from 'nostr-tools/pool'
 import WebSocket from 'ws'
 import { finalizeEvent, getPublicKey } from 'nostr-tools/pure'
 import { dOf, template } from './domain/entities'
-import { APP_TAG, KIND, visibilityKey, type CompanyState } from './domain/model'
+import { visibilityKey, type CompanyState } from './domain/model'
+import { canbanFilters, companiesNaming } from './domain/subscription'
 import { resolve } from './domain/resolve'
-import { renumberings, type Write } from './domain/commands'
+import { renumberings, retaggings, type Write } from './domain/commands'
 import { blockedWrite, subscriptionListOf, type SubscriptionList } from './domain/entitlements'
 
 export type Connection = 'connecting' | 'live' | 'denied' | 'offline'
@@ -39,6 +40,11 @@ export class Board {
   private closed = false
   private me: string
   private visible = ''
+  // Counts subscriptions; callbacks from one already closed (nostr-tools fires oneose on close) are ignored.
+  private generation = 0
+  // Organizations events show this agent is in; the subscription asks for each separately (the
+  // relay caps results per filter before filtering them per agent).
+  private known = new Set<string>()
   private recheck?: ReturnType<typeof setTimeout>
 
   constructor(
@@ -50,19 +56,34 @@ export class Board {
     this.pool.automaticallyAuth = () => (event) => Promise.resolve(finalizeEvent(event, this.secret))
   }
 
+  private subscriptionKey(): string {
+    return `${visibilityKey(this.companies(), this.me)}|${[...this.known].sort().join(',')}`
+  }
+
   start(): void {
-    this.sub = this.pool.subscribe([this.relay], { kinds: [KIND], '#t': [APP_TAG] }, {
+    const openedFor = this.subscriptionKey()
+    const generation = ++this.generation
+    const current = () => !this.closed && generation === this.generation
+    const filters = canbanFilters(this.me, this.known, [])
+    this.sub = this.pool.subscribeMap(filters.map((filter) => ({ url: this.relay, filter })), {
       onauth: async (event) => finalizeEvent(event, this.secret),
       onevent: (event) => this.add(event),
       oneose: () => {
+        if (!current()) return
         this.connection = 'live'
+        this.visible = this.subscriptionKey()
+        // Learned of organizations the subscription didn't cover yet: ask again before counting as loaded.
+        if (this.visible !== openedFor) {
+          this.sub?.close()
+          this.start()
+          return
+        }
         this.loadedAt = Date.now()
-        this.visible = visibilityKey(this.companies(), this.me)
         this.markLoaded()
       },
       onclose: (reasons) => {
         const reason = reasons.map((r) => r.reason).join('; ')
-        if (this.closed || reason.includes('closed by caller')) return
+        if (!current() || reason.includes('closed by caller')) return
         this.lastError = reason
         this.connection = /restricted|auth-required/i.test(reason) ? 'denied' : 'offline'
         this.markLoaded()
@@ -139,6 +160,7 @@ export class Board {
     this.events.set(event.id, event)
     const d = event.tags.find((t) => t[0] === 'd')?.[1]
     if (d) this.newestByD.set(d, Math.max(this.newestByD.get(d) ?? 0, event.created_at))
+    for (const c of companiesNaming(this.me, event)) this.known.add(c)
     if (this.loaded) this.scheduleRecheck()
   }
 
@@ -148,7 +170,7 @@ export class Board {
     clearTimeout(this.recheck)
     this.recheck = setTimeout(() => {
       void this.healNumbers()
-      const key = visibilityKey(this.companies(), this.me)
+      const key = this.subscriptionKey()
       if (key === this.visible || this.closed) return
       this.visible = key
       this.sub?.close()
@@ -160,7 +182,7 @@ export class Board {
 
   private async healNumbers(): Promise<void> {
     if (this.healing || this.connection !== 'live') return
-    const writes = [...this.companies().values()].flatMap((state) => renumberings(state, this.me))
+    const writes = [...this.companies().values()].flatMap((state) => [...renumberings(state, this.me), ...retaggings(state, this.me)])
     if (!writes.length) return
     this.healing = true
     try {

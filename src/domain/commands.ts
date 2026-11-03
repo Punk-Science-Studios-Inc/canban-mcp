@@ -1,5 +1,5 @@
 import { newId, type Address, type Content, type LaneContent, type TaskContent } from './entities'
-import { DEFAULT_LANES, MAX_TASK_BODY_BYTES, type CompanyState, type Lane, type MemberRole, type Project, type Task } from './model'
+import { DEFAULT_LANES, MAX_TASK_BODY_BYTES, isAdmin, type CompanyState, type Lane, type MemberRole, type Project, type Task } from './model'
 
 // A project whose content can't be read must not be written to: it would overwrite encrypted data
 // with plaintext or reuse task numbers it can't see.
@@ -140,6 +140,13 @@ export function renumberings(state: CompanyState, me: string): Write[] {
     }
   }
   return writes
+}
+
+// Member events written before access tags carry no p tag, so the member's client never finds the
+// organization (src/domain/subscription.ts). An admin's client rewrites them unchanged, with tags.
+export function retaggings(state: CompanyState, me: string): Write[] {
+  if (state.locked || !isAdmin(state, me)) return []
+  return state.members.filter((m) => m.untagged && m.role !== 'owner').flatMap((m) => setMember(state.company.id, m.pubkey, m.role as MemberRole, m.name))
 }
 
 export function lanesOf(state: CompanyState, projectId: string): Lane[] {

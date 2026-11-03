@@ -97,13 +97,16 @@ const validRole = (role: unknown): MemberRole | undefined => (ROLES.includes(rol
 // Signed tags decide roles, assignees and deletions whenever an event carries them, so clients and
 // the relay always agree; content only supplies names. Old plaintext events without tags fall back
 // to their content.
-function memberEntry(event: NostrEvent | undefined, keyring?: Keyring): MemberContent | undefined {
+function memberEntry(event: NostrEvent | undefined, keyring?: Keyring): MemberEntry | undefined {
   if (!event) return undefined
   const read = open<MemberContent>(event, keyring)
   const roleTag = tag(event, 'role')
   const role = validRole(roleTag ? roleTag[1] : isEncrypted(event) ? undefined : read?.role)
-  return role ? { role, name: typeof read?.name === 'string' ? read.name : undefined } : undefined
+  const untagged = !event.tags.some((t) => t[0] === 'p' && t[1]) || undefined
+  return role ? { role, name: typeof read?.name === 'string' ? read.name : undefined, untagged } : undefined
 }
+
+type MemberEntry = MemberContent & { untagged?: true }
 
 const hasAccessTags = (event: NostrEvent) => isEncrypted(event) || event.tags.some((t) => t[0] === 'role' || t[0] === 'removed' || (t[0] === 'p' && !!t[1]))
 
@@ -121,7 +124,7 @@ function resolveCompany(companyId: string, ce: CompanyEvents, keyring?: Keyring)
   const ownerEntry = memberEntry(latest(ce.members.get(owner) ?? [], (pk) => pk === owner), keyring)
   const members: Member[] = [{ pubkey: owner, role: 'owner', name: ownerEntry?.name }]
   for (const [pubkey, entry] of roles) {
-    if (entry.role !== 'removed') members.push({ pubkey, role: entry.role, name: entry.name })
+    if (entry.role !== 'removed') members.push({ pubkey, role: entry.role, name: entry.name, ...(entry.untagged ? { untagged: true } : {}) })
   }
   const memberSet = new Set(members.map((m) => m.pubkey))
   const admins = new Set(members.filter((m) => m.role !== 'member').map((m) => m.pubkey))
@@ -189,9 +192,9 @@ function resolveCompany(companyId: string, ce: CompanyEvents, keyring?: Keyring)
   return { locked: companyLocked, company: { id: companyId, owner, name: company.name }, members, projects, lanes, tasks }
 }
 
-function resolveRoles(owner: string, versions: Map<string, Versions>, keyring?: Keyring): Map<string, MemberContent> {
+function resolveRoles(owner: string, versions: Map<string, Versions>, keyring?: Keyring): Map<string, MemberEntry> {
   let admins = new Set([owner])
-  let roles = new Map<string, MemberContent>()
+  let roles = new Map<string, MemberEntry>()
   for (let pass = 0; pass < MAX_ROLE_PASSES; pass++) {
     roles = new Map()
     for (const [pubkey, v] of versions) {
