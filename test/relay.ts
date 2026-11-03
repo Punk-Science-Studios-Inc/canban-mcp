@@ -18,6 +18,9 @@ export interface TestRelay {
 function visible(viewer: string, event: NostrEvent, events: NostrEvent[]): boolean {
   const d = event.tags.find((t) => t[0] === 'd')?.[1] ?? ''
   if (event.kind !== 30078 || !d.startsWith('canban:') || event.pubkey === viewer) return true
+  // Key envelopes go to the member they are for; keyrings only to their author.
+  if (d.startsWith('canban:key:')) return d.endsWith(`:${viewer}`)
+  if (d.startsWith('canban:keyring:')) return false
   const address = parseD(d)
   const state = address && resolve(events).get(address.companyId)
   if (!address || !state || !state.members.some((m) => m.pubkey === viewer)) return false

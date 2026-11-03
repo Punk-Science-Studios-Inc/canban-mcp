@@ -31,7 +31,7 @@ describe('envelopes', () => {
     const old = newOrgKey()
     const current = newOrgKey()
     const history = new Map([[old.kid, old.key], [current.kid, current.key]])
-    const event = admin.sign(await envelope(admin.cipher, companyId, member.pubkey, history, 1))
+    const event = admin.sign(await envelope(admin.cipher, companyId, member.pubkey, history, 1, 'x'))
     expect(event.tags).toContainEqual(['p', member.pubkey])
     const opened = await openEnvelope(member.cipher, event, org, member.pubkey)
     expect([...opened.keys()].sort()).toEqual([old.kid, current.kid].sort())
@@ -40,20 +40,20 @@ describe('envelopes', () => {
 
   it('are ignored from anyone but an admin', async () => {
     const k = newOrgKey()
-    const event = member.sign(await envelope(member.cipher, companyId, member.pubkey, new Map([[k.kid, k.key]]), 1))
+    const event = member.sign(await envelope(member.cipher, companyId, member.pubkey, new Map([[k.kid, k.key]]), 1, 'x'))
     expect((await openEnvelope(member.cipher, event, org, member.pubkey)).size).toBe(0)
   })
 
   it('drop keys that do not hash to their kid', async () => {
     const k = newOrgKey()
     const forged = orgKey(crypto.getRandomValues(new Uint8Array(32)))
-    const event = admin.sign(await envelope(admin.cipher, companyId, member.pubkey, new Map([[k.kid, forged.key]]), 1))
+    const event = admin.sign(await envelope(admin.cipher, companyId, member.pubkey, new Map([[k.kid, forged.key]]), 1, 'x'))
     expect((await openEnvelope(member.cipher, event, org, member.pubkey)).size).toBe(0)
   })
 
   it('only open for the member they name', async () => {
     const k = newOrgKey()
-    const event = admin.sign(await envelope(admin.cipher, companyId, admin.pubkey, new Map([[k.kid, k.key]]), 1))
+    const event = admin.sign(await envelope(admin.cipher, companyId, admin.pubkey, new Map([[k.kid, k.key]]), 1, 'x'))
     expect((await openEnvelope(member.cipher, event, org, member.pubkey)).size).toBe(0)
   })
 })
