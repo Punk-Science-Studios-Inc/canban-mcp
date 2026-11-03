@@ -143,3 +143,18 @@ export function tasksInLane(state: CompanyState, laneId: string): Task[] {
 export function canWrite(state: CompanyState, project: Project, pubkey: string): boolean {
   return state.members.some((m) => m.pubkey === pubkey && m.role !== 'member') || project.members.includes(pubkey)
 }
+
+// People from the other organizations `me` is an admin of who are not yet in `state`, with the
+// name they were given there, so an admin can add someone they already work with by name.
+export function knownPeople(companies: Iterable<CompanyState>, me: string, state: CompanyState): { pubkey: string; name?: string }[] {
+  const present = new Set(state.members.map((m) => m.pubkey))
+  const found = new Map<string, string | undefined>()
+  for (const other of companies) {
+    if (other.company.id === state.company.id || !other.members.some((m) => m.pubkey === me && m.role !== 'member')) continue
+    for (const m of other.members) {
+      if (m.pubkey === me || present.has(m.pubkey)) continue
+      if (!found.has(m.pubkey) || (!found.get(m.pubkey) && m.name)) found.set(m.pubkey, m.name)
+    }
+  }
+  return [...found].map(([pubkey, name]) => ({ pubkey, name })).sort((a, b) => (a.name ?? '~').localeCompare(b.name ?? '~'))
+}
