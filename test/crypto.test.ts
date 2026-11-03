@@ -80,6 +80,7 @@ describe('encrypted content', () => {
     const { companyId, events } = board()
     const locked = resolve(events).get(companyId)!
     expect(locked.locked).toBe(true)
+    expect(locked.kid).toBe(key.kid)
     expect(locked.projects[0].locked).toBe(true)
     expect(() => commands.createTask(locked.projects[0], 'x', 'New')).toThrow()
     expect(resolve(events, keyring).get(companyId)!.projects[0].locked).toBe(false)
@@ -89,5 +90,78 @@ describe('encrypted content', () => {
     const { companyId, events } = board()
     const state = resolve(events, keyring).get(companyId)!
     expect(() => commands.createTask(state.projects[0], state.lanes[0].id, 'x', undefined, { body: '漢'.repeat(10_001) })).toThrow()
+  })
+})
+
+describe('key rotation state', () => {
+  const aliceKey = generateSecretKey()
+  const admin = getPublicKey(aliceKey)
+  const bob = getPublicKey(generateSecretKey())
+  const byAlice = (writes: commands.Write[], k: typeof key | null = key) =>
+    writes.map(({ address, content }) => finalizeEvent(template(address, content as never, clock++, k ?? undefined), aliceKey))
+  const company = (companyId: string, holders: string[]) => [{ address: { type: 'company' as const, companyId }, content: { name: 'Rotate Co', holders } }]
+
+  function org() {
+    const c = commands.createCompany(owner, 'Rotate Co')
+    const events = sign([...c.writes, ...commands.setMember(c.companyId, admin, 'admin'), ...commands.setMember(c.companyId, bob, 'member')])
+    events.push(...sign(company(c.companyId, [owner, admin, bob]) as commands.Write[]))
+    return { companyId: c.companyId, events }
+  }
+
+  it('asks for a new key once someone holding it is no longer a member', () => {
+    const { companyId, events } = org()
+    expect(resolve(events, keyring).get(companyId)!.rotationDue).toBeUndefined()
+    events.push(...byAlice(commands.setMember(companyId, bob, 'removed')))
+    expect(resolve(events, keyring).get(companyId)!.rotationDue).toBe(true)
+
+    const next = orgKey(generateSecretKey())
+    events.push(...byAlice(company(companyId, [owner, admin]) as commands.Write[], next))
+    const rotated = resolve(events, new Map([...keyring, [next.kid, next.key]])).get(companyId)!
+    expect(rotated.kid).toBe(next.kid)
+    expect(rotated.company.name).toBe('Rotate Co')
+    expect(rotated.rotationDue).toBeUndefined()
+  })
+
+  // The relay keeps only each author's newest copy of an address.
+  const newestOnly = (events: NostrEvent[]) => {
+    const newest = new Map<string, NostrEvent>()
+    for (const e of events) {
+      const k = `${e.pubkey}:${e.tags.find((t) => t[0] === 'd')![1]}`
+      if ((newest.get(k)?.created_at ?? -1) < e.created_at) newest.set(k, e)
+    }
+    return [...newest.values()]
+  }
+
+  it('keeps the holders through a rename', () => {
+    const { companyId, events } = org()
+    events.push(...sign(commands.renameCompany(companyId, 'Renamed', resolve(events, keyring).get(companyId)!.holders)))
+    events.push(...byAlice(commands.setMember(companyId, bob, 'removed')))
+    const state = resolve(newestOnly(events), keyring).get(companyId)!
+    expect(state.company.name).toBe('Renamed')
+    expect(state.rotationDue).toBe(true)
+  })
+
+  it('counts holders listed by any admin for the current key', () => {
+    const { companyId, events } = org()
+    const carol = getPublicKey(generateSecretKey())
+    events.push(...sign(commands.setMember(companyId, carol, 'member')))
+    // Alice adds Carol while the owner's list doesn't have her: both lists count.
+    events.push(...byAlice(company(companyId, [owner, admin, carol]) as commands.Write[]))
+    events.push(...sign(commands.setMember(companyId, carol, 'removed')))
+    expect(resolve(newestOnly(events), keyring).get(companyId)!.rotationDue).toBe(true)
+  })
+
+  it('does not rotate over a holder whose member event has not loaded', () => {
+    const { companyId, events } = org()
+    const partial = events.filter((e) => !e.tags.some((t) => t[0] === 'd' && t[1].endsWith(bob)))
+    expect(resolve(partial, keyring).get(companyId)!.rotationDue).toBeUndefined()
+  })
+
+  it('ignores an admin’s plaintext company event: no downgrade, no hiding', () => {
+    const { companyId, events } = org()
+    events.push(...byAlice(commands.renameCompany(companyId, ''), null))
+    const state = resolve(events, keyring).get(companyId)!
+    expect(state.kid).toBe(key.kid)
+    expect(state.company.name).toBe('Rotate Co')
   })
 })

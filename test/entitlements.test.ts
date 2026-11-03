@@ -48,7 +48,9 @@ describe('blockedWrite', () => {
 
   it('makes an organization over the free plan read-only, except for removals', () => {
     const over = state(2, 1)
-    expect(blockedWrite(over, undefined, commands.renameCompany(org, 'x')[0])).toMatch(/read-only/)
+    expect(blockedWrite(over, undefined, commands.createProject(org, 'x', []).writes[0])).toMatch(/read-only/)
+    // Renaming or re-keying the organization stays possible, so a key can always be rotated.
+    expect(blockedWrite(over, undefined, commands.renameCompany(org, 'x')[0])).toBeUndefined()
     expect(blockedWrite(over, undefined, commands.removeProject(over.projects[1])[0])).toBeUndefined()
   })
 

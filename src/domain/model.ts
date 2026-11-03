@@ -61,6 +61,14 @@ export interface Task {
 export interface CompanyState {
   // Its name or other content couldn't be read (no key).
   locked?: boolean
+  // The key new content is encrypted with, named by the newest company event from the owner or an
+  // admin, and when that was written. None until encrypted.
+  kid?: string
+  kidAt?: number
+  // Who has been handed the current key, and whether one of them is no longer a member, so an admin
+  // must replace it.
+  holders?: string[]
+  rotationDue?: true
   company: Company
   members: Member[]
   projects: Project[]

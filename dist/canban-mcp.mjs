@@ -45154,6 +45154,7 @@ function withinFreeTier(state) {
 function blockedWrite(state, list, write2, today) {
   if (entitlement(list, state.company.id, today) !== "unpaid") return void 0;
   const { address, content } = write2;
+  if (address.type === "company") return void 0;
   const removing = "removed" in content && content.removed || "role" in content && content.role === "removed";
   if (removing) return void 0;
   const limits = `The free plan covers ${FREE_PROJECTS} project and ${FREE_PEOPLE} people. The organization owner can subscribe under Plan & billing.`;
@@ -45166,6 +45167,9 @@ function blockedWrite(state, list, write2, today) {
   }
   return void 0;
 }
+
+// src/domain/keys.ts
+var keyringD = (pubkey) => `canban:keyring:${pubkey}`;
 
 // src/domain/profile.ts
 var profileD = (pubkey) => `canban:profile:${pubkey}`;
@@ -45180,7 +45184,8 @@ function canbanFilters(me2, companyIds, people) {
     // My own writes: organizations I own, my profile.
     { ...base, authors: [me2] },
     ...[...new Set(companyIds)].sort().map((c) => ({ ...base, "#c": [c] })),
-    { ...base, "#d": [SUBSCRIPTIONS_D] },
+    // The keyring is rarely rewritten, so the authors filter (newest first, capped) can miss it.
+    { ...base, "#d": [SUBSCRIPTIONS_D, keyringD(me2)] },
     ...profiles.length ? [{ ...base, "#d": profiles }] : []
   ];
 }
@@ -45275,12 +45280,10 @@ function memberEntry(event, keyring) {
 var hasAccessTags = (event) => isEncrypted(event) || event.tags.some((t) => t[0] === "role" || t[0] === "removed" || t[0] === "p" && !!t[1]);
 function resolveCompany(companyId, ce, keyring) {
   const owner = ownerOf(companyId);
-  const companyEvent = latest(ce.company, (pk) => pk === owner);
-  if (!companyEvent) return void 0;
-  const read = open2(companyEvent, keyring);
-  if (!isEncrypted(companyEvent) && !read?.name) return void 0;
-  const company = { name: read?.name ?? "" };
-  const companyLocked = !read;
+  const ownerEvent = latest(ce.company, (pk) => pk === owner);
+  if (!ownerEvent) return void 0;
+  const ownerRead = open2(ownerEvent, keyring);
+  if (!isEncrypted(ownerEvent) && !ownerRead?.name) return void 0;
   const roles = resolveRoles(owner, ce.members, keyring);
   const ownerEntry = memberEntry(latest(ce.members.get(owner) ?? [], (pk) => pk === owner), keyring);
   const members2 = [{ pubkey: owner, role: "owner", name: ownerEntry?.name }];
@@ -45289,6 +45292,18 @@ function resolveCompany(companyId, ce, keyring) {
   }
   const memberSet = new Set(members2.map((m) => m.pubkey));
   const admins = new Set(members2.filter((m) => m.role !== "member").map((m) => m.pubkey));
+  const encrypted = latest(
+    ce.company.filter((e) => isEncrypted(e) && kidTag(e)),
+    (pk) => admins.has(pk)
+  );
+  const companyEvent = encrypted ?? ownerEvent;
+  const read = companyEvent === ownerEvent ? ownerRead : open2(companyEvent, keyring);
+  const company = { name: read?.name ?? "" };
+  const companyLocked = !read;
+  const kid = kidTag(companyEvent) || void 0;
+  const holders = kid ? holdersOf(ce.company, kid, admins, keyring) : [];
+  const departed = holders.filter((pk) => !memberSet.has(pk));
+  const rotationDue = departed.length > 0 && departed.every((pk) => ce.members.has(pk));
   const projects = [];
   const lanes = [];
   const tasks = [];
@@ -45345,7 +45360,18 @@ function resolveCompany(companyId, ce, keyring) {
   tasks.sort(byOrder);
   const projectOf2 = new Map(tasks.map((t) => [t.id, t.projectId]));
   for (const t of tasks) t.dependsOn = [...new Set(t.dependsOn)].filter((id) => id !== t.id && projectOf2.get(id) === t.projectId);
-  return { locked: companyLocked, company: { id: companyId, owner, name: company.name }, members: members2, projects, lanes, tasks };
+  return { locked: companyLocked, kid, kidAt: kid ? companyEvent.created_at : void 0, ...kid ? { holders } : {}, ...rotationDue ? { rotationDue: true } : {}, company: { id: companyId, owner, name: company.name }, members: members2, projects, lanes, tasks };
+}
+function holdersOf(versions, kid, admins, keyring) {
+  const holders = /* @__PURE__ */ new Set();
+  for (const event of versions) {
+    if (!admins.has(event.pubkey) || kidTag(event) !== kid) continue;
+    const listed = open2(event, keyring)?.holders;
+    if (Array.isArray(listed)) {
+      for (const pk of listed) if (typeof pk === "string") holders.add(pk);
+    }
+  }
+  return [...holders];
 }
 function resolveRoles(owner, versions, keyring) {
   let admins = /* @__PURE__ */ new Set([owner]);

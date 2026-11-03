@@ -54,9 +54,13 @@ export function withinFreeTier(state: CompanyState): boolean {
 
 // Organizations without a subscription keep the free tier: one project and three people. Past
 // that they are read-only, except for removals that bring them back within it.
+// Envelopes and keyrings are not Writes and the company rewrite is exempt, so plan limits never
+// stop a key rotation; re-encryption (docs/encryption.md, Migration) doesn't call this.
 export function blockedWrite(state: CompanyState, list: SubscriptionList | undefined, write: Write, today?: string): string | undefined {
   if (entitlement(list, state.company.id, today) !== 'unpaid') return undefined
   const { address, content } = write
+  // Renaming or re-keying the organization adds nothing the plan limits.
+  if (address.type === 'company') return undefined
   const removing = ('removed' in content && content.removed) || ('role' in content && content.role === 'removed')
   if (removing) return undefined
   const limits = `The free plan covers ${FREE_PROJECTS} project and ${FREE_PEOPLE} people. The organization owner can subscribe under Plan & billing.`

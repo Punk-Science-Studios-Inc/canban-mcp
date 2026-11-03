@@ -1,6 +1,7 @@
 import type { Filter, NostrEvent } from 'nostr-tools'
 import { SUBSCRIPTIONS_D } from './entitlements'
 import { APP_TAG, KIND } from './model'
+import { keyringD } from './keys'
 import { profileD } from './profile'
 
 // What a client asks the relay for. One filter per organization, because the relay caps each
@@ -15,7 +16,8 @@ export function canbanFilters(me: string, companyIds: Iterable<string>, people: 
     // My own writes: organizations I own, my profile.
     { ...base, authors: [me] },
     ...[...new Set(companyIds)].sort().map((c) => ({ ...base, '#c': [c] })),
-    { ...base, '#d': [SUBSCRIPTIONS_D] },
+    // The keyring is rarely rewritten, so the authors filter (newest first, capped) can miss it.
+    { ...base, '#d': [SUBSCRIPTIONS_D, keyringD(me)] },
     ...(profiles.length ? [{ ...base, '#d': profiles }] : []),
   ]
 }

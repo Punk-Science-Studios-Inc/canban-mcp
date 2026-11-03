@@ -1,7 +1,7 @@
 import type { NostrEvent } from 'nostr-tools'
 import { parseD, type Address, type CompanyContent, type LaneContent, type MemberContent, type ProjectContent, type TaskContent } from './entities'
 import { KIND, ownerOf, type CompanyState, type Lane, type Member, type MemberRole, type Project, type Task } from './model'
-import { isEncrypted, open, type Keyring } from './crypto'
+import { isEncrypted, kidTag, open, type Keyring } from './crypto'
 
 type Versions = NostrEvent[]
 
@@ -113,12 +113,10 @@ const hasAccessTags = (event: NostrEvent) => isEncrypted(event) || event.tags.so
 function resolveCompany(companyId: string, ce: CompanyEvents, keyring?: Keyring): CompanyState | undefined {
   const owner = ownerOf(companyId)
   // The owner's signed company event makes the organization real, whether or not its name can be read.
-  const companyEvent = latest(ce.company, (pk) => pk === owner)
-  if (!companyEvent) return undefined
-  const read = open<CompanyContent>(companyEvent, keyring)
-  if (!isEncrypted(companyEvent) && !read?.name) return undefined
-  const company = { name: read?.name ?? '' }
-  const companyLocked = !read
+  const ownerEvent = latest(ce.company, (pk) => pk === owner)
+  if (!ownerEvent) return undefined
+  const ownerRead = open<CompanyContent>(ownerEvent, keyring)
+  if (!isEncrypted(ownerEvent) && !ownerRead?.name) return undefined
 
   const roles = resolveRoles(owner, ce.members, keyring)
   const ownerEntry = memberEntry(latest(ce.members.get(owner) ?? [], (pk) => pk === owner), keyring)
@@ -128,6 +126,27 @@ function resolveCompany(companyId: string, ce: CompanyEvents, keyring?: Keyring)
   }
   const memberSet = new Set(members.map((m) => m.pubkey))
   const admins = new Set(members.filter((m) => m.role !== 'member').map((m) => m.pubkey))
+
+  // Admins rewrite the company event when they rotate its key, so its name and current key come from
+  // the newest encrypted version by the owner or an admin. Once one exists, plaintext versions (an
+  // old cached app's rename) are ignored, so nobody can switch the organization back to plaintext;
+  // and existence never depends on an admin's event, so no admin can hide it.
+  const encrypted = latest(
+    ce.company.filter((e) => isEncrypted(e) && kidTag(e)),
+    (pk) => admins.has(pk),
+  )
+  const companyEvent = encrypted ?? ownerEvent
+  const read = companyEvent === ownerEvent ? ownerRead : open<CompanyContent>(companyEvent, keyring)
+  const company = { name: read?.name ?? '' }
+  const companyLocked = !read
+  const kid = kidTag(companyEvent) || undefined
+  // Everyone handed the current key, from every readable version naming it, so a concurrent addition
+  // or a writer that left the list out loses nobody. Someone on it who is no longer a member means the
+  // key must be replaced; but only once their member event has loaded, since a member missing from a
+  // partial load would otherwise be shut out by the rotation.
+  const holders = kid ? holdersOf(ce.company, kid, admins, keyring) : []
+  const departed = holders.filter((pk) => !memberSet.has(pk))
+  const rotationDue = departed.length > 0 && departed.every((pk) => ce.members.has(pk))
 
   const projects: Project[] = []
   const lanes: Lane[] = []
@@ -189,7 +208,17 @@ function resolveCompany(companyId: string, ce: CompanyEvents, keyring?: Keyring)
   const projectOf = new Map(tasks.map((t) => [t.id, t.projectId]))
   for (const t of tasks) t.dependsOn = [...new Set(t.dependsOn)].filter((id) => id !== t.id && projectOf.get(id) === t.projectId)
 
-  return { locked: companyLocked, company: { id: companyId, owner, name: company.name }, members, projects, lanes, tasks }
+  return { locked: companyLocked, kid, kidAt: kid ? companyEvent.created_at : undefined, ...(kid ? { holders } : {}), ...(rotationDue ? { rotationDue: true as const } : {}), company: { id: companyId, owner, name: company.name }, members, projects, lanes, tasks }
+}
+
+function holdersOf(versions: Versions, kid: string, admins: Set<string>, keyring?: Keyring): string[] {
+  const holders = new Set<string>()
+  for (const event of versions) {
+    if (!admins.has(event.pubkey) || kidTag(event) !== kid) continue
+    const listed = open<CompanyContent>(event, keyring)?.holders
+    if (Array.isArray(listed)) for (const pk of listed) if (typeof pk === 'string') holders.add(pk)
+  }
+  return [...holders]
 }
 
 function resolveRoles(owner: string, versions: Map<string, Versions>, keyring?: Keyring): Map<string, MemberEntry> {

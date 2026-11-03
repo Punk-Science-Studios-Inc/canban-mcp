@@ -26,8 +26,10 @@ export function createCompany(owner: string, name: string): { companyId: string;
   }
 }
 
-export function renameCompany(companyId: string, name: string): Write[] {
-  return [write({ type: 'company', companyId }, { name })]
+// An encrypted organization's company event also lists who holds its key (state.holders); a rename
+// must carry them, or later removals would not trigger a new key.
+export function renameCompany(companyId: string, name: string, holders?: string[]): Write[] {
+  return [write({ type: 'company', companyId }, { name, ...(holders ? { holders } : {}) })]
 }
 
 export function setMember(companyId: string, pubkey: string, role: MemberRole, name?: string): Write[] {

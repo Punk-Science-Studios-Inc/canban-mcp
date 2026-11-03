@@ -11,6 +11,8 @@ export type Address =
 
 export interface CompanyContent {
   name: string
+  // Who has been handed the current key (encrypted organizations only).
+  holders?: string[]
 }
 export interface MemberContent {
   role: MemberRole

@@ -15,7 +15,8 @@ export interface OrgKey {
 // kid → key, for every key a person can open.
 export type Keyring = Map<string, Uint8Array>
 
-export const kidOf = (key: Uint8Array): string => bytesToHex(sha256(key)).slice(0, 16)
+// 128 bits, so nobody can make two keys share an id.
+export const kidOf = (key: Uint8Array): string => bytesToHex(sha256(key)).slice(0, 32)
 
 export const orgKey = (key: Uint8Array): OrgKey => ({ kid: kidOf(key), key })
 
