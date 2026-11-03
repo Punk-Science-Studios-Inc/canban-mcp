@@ -70,7 +70,8 @@ export class Board {
         decrypt: async (peer, text) => nip44.v2.decrypt(text, conversation(peer)),
       }),
       sign: async (unsigned) => finalizeEvent(unsigned, this.secret),
-      send: (event) => this.send(event),
+      // Kept only once the relay accepts it, so a refused key change is never taken as current.
+      send: (event) => this.send(event, false),
       nextTimestamp: (d) => this.nextTimestamp(d),
       nextTimestampIn: (companyId) => {
         let newest = 0
@@ -80,6 +81,7 @@ export class Board {
       setKeys: (keys) => (this.keys = keys),
       report: (outcome, error) => {
         if (outcome === 'failed') this.lastError = `Organization keys: ${error instanceof Error ? error.message : String(error)}`
+        else if (this.lastError.startsWith('Organization keys:')) this.lastError = ''
       },
     })
   }
@@ -136,7 +138,7 @@ export class Board {
     }
     if (!this.loaded) await Promise.race([new Promise<void>((r) => this.waiters.push(r)), new Promise<void>((r) => setTimeout(r, READY_TIMEOUT))])
     // Opens any organization key that arrived, so encrypted boards read at once.
-    await this.keychain.sync()
+    await this.keychain.settled()
   }
 
   companies(): Map<string, CompanyState> {
@@ -167,12 +169,14 @@ export class Board {
     return Math.max(Math.floor(Date.now() / 1000), (this.newestByD.get(d) ?? 0) + 1)
   }
 
-  private async send(event: NostrEvent): Promise<void> {
-    this.add(event)
+  // Optimistic writes show at once; the keychain's are kept only once accepted.
+  private async send(event: NostrEvent, optimistic = true): Promise<void> {
+    if (optimistic) this.add(event)
     await Promise.any(this.pool.publish([this.relay], event, { onauth: async (e) => finalizeEvent(e, this.secret) })).catch((error: unknown) => {
       const reason = error instanceof AggregateError ? error.errors[0] : error
       throw new Error(`The relay refused the write: ${reason instanceof Error ? reason.message : String(reason)}`)
     })
+    if (!optimistic) this.add(event)
   }
 
   async names(pubkeys: string[]): Promise<Map<string, string>> {

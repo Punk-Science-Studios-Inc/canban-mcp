@@ -20,9 +20,10 @@ class Relay {
 
 let clock = 1000
 
-function client(relay: Relay) {
+function client(relay: Relay, refuse?: (e: NostrEvent) => boolean) {
   const sk = generateSecretKey()
   const me = getPublicKey(sk)
+  const failures: unknown[] = []
   let keys: Keyring = new Map()
   const companies = () => resolve(relay.events, keys)
   const chain = new Keychain({
@@ -34,19 +35,33 @@ function client(relay: Relay) {
       decrypt: async (peer, text) => nip44.v2.decrypt(text, nip44.v2.utils.getConversationKey(sk, peer)),
     }),
     sign: async (t: EventTemplate) => finalizeEvent(t, sk),
-    send: async (e) => relay.add(e),
+    send: async (e) => {
+      if (refuse?.(e)) throw new Error('refused')
+      relay.add(e)
+    },
     nextTimestamp: () => clock++,
     nextTimestampIn: () => clock++,
     setKeys: (all) => (keys = all),
     report: (outcome, error) => {
-      if (outcome === 'failed') throw error
+      failures.push(outcome === 'failed' ? error : undefined)
     },
   })
   const write = (writes: commands.Write[], companyId: string) => {
     const state = companies().get(companyId)
     for (const { address, content } of writes) relay.add(finalizeEvent(template(address, content as never, clock++, state && chain.keyFor(state)), sk))
   }
-  return { me, chain, companies, write, sk }
+  return { me, chain, companies, write, sk, failures }
+}
+
+async function organization(relay: Relay, owner: ReturnType<typeof client>) {
+  const { companyId, writes } = commands.createCompany(owner.me, 'Hidden Co')
+  const key = newOrgKey()
+  await owner.chain.adopt(companyId, key)
+  for (const { address, content } of writes) {
+    const listed = address.type === 'company' ? { ...content, holders: [owner.me] } : content
+    relay.add(finalizeEvent(template(address, listed as never, clock++, key), owner.sk))
+  }
+  return { companyId, key }
 }
 
 describe('keychain', () => {
@@ -55,14 +70,7 @@ describe('keychain', () => {
     const alice = client(relay)
     const bob = client(relay)
 
-    const { companyId, writes } = commands.createCompany(alice.me, 'Hidden Co')
-    const key = newOrgKey()
-    alice.chain.adopt(companyId, key)
-    for (const { address, content } of writes) {
-      const listed = address.type === 'company' ? { ...content, holders: [alice.me] } : content
-      relay.add(finalizeEvent(template(address, listed as never, clock++, key), alice.sk))
-    }
-    await alice.chain.share(companyId, key)
+    const { companyId, key } = await organization(relay, alice)
     expect(relay.events.every((e) => !e.content.includes('Hidden Co'))).toBe(true)
 
     alice.write(commands.setMember(companyId, bob.me, 'member'), companyId)
@@ -88,5 +96,44 @@ describe('keychain', () => {
     expect(bob.companies().get(companyId)?.locked ?? true).toBe(true)
     alice.chain.stop()
     bob.chain.stop()
+  })
+
+  it('sends an envelope again when it failed to go out', async () => {
+    const relay = new Relay()
+    let refuseEnvelopes = true
+    const alice = client(relay, (e) => refuseEnvelopes && e.tags.some((t) => t[0] === 'd' && t[1].startsWith('canban:key:') && !t[1].endsWith(e.pubkey)))
+    const bob = client(relay)
+    const { companyId } = await organization(relay, alice)
+    alice.write(commands.setMember(companyId, bob.me, 'member'), companyId)
+    await alice.chain.sync()
+    await bob.chain.sync()
+    expect(bob.companies().get(companyId)!.locked).toBe(true)
+
+    refuseEnvelopes = false
+    await alice.chain.sync()
+    await bob.chain.sync()
+    expect(bob.companies().get(companyId)!.company.name).toBe('Hidden Co')
+    alice.chain.stop()
+    bob.chain.stop()
+  })
+
+  it('keeps writing after an admin who rewrote the company event is demoted', async () => {
+    const relay = new Relay()
+    const alice = client(relay)
+    const bob = client(relay)
+    const carol = client(relay)
+    const { companyId } = await organization(relay, alice)
+    alice.write(commands.setMember(companyId, bob.me, 'admin'), companyId)
+    await alice.chain.sync()
+    await bob.chain.sync()
+    // Bob adds Carol: his client rewrites the company event, and Alice's client pins it.
+    bob.write(commands.setMember(companyId, carol.me, 'member'), companyId)
+    await bob.chain.sync()
+    await alice.chain.sync()
+    alice.write(commands.setMember(companyId, bob.me, 'member'), companyId)
+    expect(() => alice.chain.keyFor(alice.companies().get(companyId)!)).not.toThrow()
+    alice.chain.stop()
+    bob.chain.stop()
+    carol.chain.stop()
   })
 })

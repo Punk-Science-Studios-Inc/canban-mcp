@@ -53,7 +53,9 @@ export function writeKey(state: CompanyState, keyrings: Keyrings): OrgKey | unde
     return undefined
   }
   const key = keyrings.keys.get(state.company.id)?.get(state.kid)
-  if (!key || (seen && seen.at > (state.kidAt ?? 0))) throw new Error(NOT_YET)
+  // A different key seen named later means this one is from before a rotation. The same key named
+  // by an event that no longer counts (its admin was demoted) is still current.
+  if (!key || (seen && seen.kid !== state.kid && seen.at > (state.kidAt ?? 0))) throw new Error(NOT_YET)
   return { kid: state.kid, key }
 }
 
@@ -84,24 +86,28 @@ function decode(raw: unknown): Keyring {
   return ring
 }
 
-export async function envelope(cipher: Cipher, companyId: string, member: string, history: Keyring, createdAt: number): Promise<EventTemplate> {
+// `kid` is the organization's current key, named in a tag so the writer can tell later which
+// members already have it without decrypting.
+export async function envelope(cipher: Cipher, companyId: string, member: string, history: Keyring, createdAt: number, kid: string): Promise<EventTemplate> {
   return {
     kind: KIND,
     created_at: createdAt,
     // The p tag lets the member's subscription find it.
-    tags: [['d', envelopeD(companyId, member)], ['t', APP_TAG], ['c', companyId], ['p', member]],
+    tags: [['d', envelopeD(companyId, member)], ['t', APP_TAG], ['c', companyId], ['p', member], ['k', kid]],
     content: await cipher.encrypt(member, JSON.stringify(encode(history))),
   }
 }
 
 // The keys in an envelope for `me`, accepted only from a current admin of the organization (the
-// owner counts). Empty when the envelope isn't one, or can't be opened.
+// owner counts). Empty when the envelope isn't one or holds nothing valid; a signer that refuses or
+// fails to decrypt throws, so the caller can try again.
 export async function openEnvelope(cipher: Cipher, event: NostrEvent, state: CompanyState, me: string): Promise<Keyring> {
   const d = event.tags.find((t) => t[0] === 'd')?.[1]
   if (event.kind !== KIND || d !== envelopeD(state.company.id, me)) return new Map()
   if (!isAdmin(state, event.pubkey)) return new Map()
+  const text = await cipher.decrypt(event.pubkey, event.content)
   try {
-    return decode(JSON.parse(await cipher.decrypt(event.pubkey, event.content)))
+    return decode(JSON.parse(text))
   } catch {
     return new Map()
   }
@@ -125,8 +131,10 @@ export async function openKeyring(cipher: Cipher, event: NostrEvent, me: string)
   const keyrings = emptyKeyrings()
   const d = event.tags.find((t) => t[0] === 'd')?.[1]
   if (event.kind !== KIND || event.pubkey !== me || d !== keyringD(me)) return keyrings
+  // A signer that refuses or fails throws, so the caller can try again.
+  const text = await cipher.decrypt(me, event.content)
   try {
-    const raw = JSON.parse(await cipher.decrypt(me, event.content)) as { keys?: Record<string, unknown>; current?: Record<string, { kid?: unknown; at?: unknown }> }
+    const raw = JSON.parse(text) as { keys?: Record<string, unknown>; current?: Record<string, { kid?: unknown; at?: unknown }> }
     for (const [companyId, ring] of Object.entries(raw.keys ?? {})) {
       const keys = decode(ring)
       if (keys.size) keyrings.keys.set(companyId, keys)
