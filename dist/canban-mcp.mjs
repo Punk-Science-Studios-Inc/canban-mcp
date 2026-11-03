@@ -45885,12 +45885,15 @@ var Keychain = class {
     const event = await this.host.sign(unsigned);
     this.check();
     this.opened.add(event.id);
-    await this.host.send(event);
+    await this.sendOrRefuse(event);
   }
   async publish(unsigned) {
     this.check();
     const event = await this.host.sign(unsigned);
     this.check();
+    await this.sendOrRefuse(event);
+  }
+  async sendOrRefuse(event) {
     try {
       await this.host.send(event);
     } catch (error62) {

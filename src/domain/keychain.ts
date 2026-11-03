@@ -335,13 +335,17 @@ export class Keychain {
     const event = await this.host.sign(unsigned)
     this.check()
     this.opened.add(event.id)
-    await this.host.send(event)
+    await this.sendOrRefuse(event)
   }
 
   private async publish(unsigned: EventTemplate): Promise<void> {
     this.check()
     const event = await this.host.sign(unsigned)
     this.check()
+    await this.sendOrRefuse(event)
+  }
+
+  private async sendOrRefuse(event: NostrEvent): Promise<void> {
     try {
       await this.host.send(event)
     } catch (error) {
