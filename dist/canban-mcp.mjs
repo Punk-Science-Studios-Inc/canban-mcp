@@ -8685,7 +8685,7 @@ var require_sender = __commonJS({
        */
       static frame(data, options) {
         let mask;
-        let merge2 = false;
+        let merge3 = false;
         let offset = 2;
         let skipMasking = false;
         if (options.mask) {
@@ -8718,7 +8718,7 @@ var require_sender = __commonJS({
           }
         } else {
           dataLength = data.length;
-          merge2 = options.mask && options.readOnly && !skipMasking;
+          merge3 = options.mask && options.readOnly && !skipMasking;
         }
         let payloadLength = dataLength;
         if (dataLength >= 65536) {
@@ -8728,7 +8728,7 @@ var require_sender = __commonJS({
           offset += 2;
           payloadLength = 126;
         }
-        const target = Buffer.allocUnsafe(merge2 ? dataLength + offset : offset);
+        const target = Buffer.allocUnsafe(merge3 ? dataLength + offset : offset);
         target[0] = options.fin ? options.opcode | 128 : options.opcode;
         if (options.rsv1) target[0] |= 64;
         target[1] = payloadLength;
@@ -8745,7 +8745,7 @@ var require_sender = __commonJS({
         target[offset - 2] = mask[2];
         target[offset - 1] = mask[3];
         if (skipMasking) return [target, data];
-        if (merge2) {
+        if (merge3) {
           applyMask(data, mask, target, offset, dataLength);
           return [target];
         }
@@ -19671,7 +19671,7 @@ function isRecursive(inst, stack, resolve2) {
     }
     return answer;
   };
-  const merge2 = (answer) => {
+  const merge3 = (answer) => {
     if (answer > result)
       result = answer;
   };
@@ -19680,7 +19680,7 @@ function isRecursive(inst, stack, resolve2) {
   switch (kind) {
     case "object": {
       const raw = rawShape(def);
-      merge2(raw ? shape(raw, true) : ASSUMED);
+      merge3(raw ? shape(raw, true) : ASSUMED);
       check2(def.catchall);
       break;
     }
@@ -19730,7 +19730,7 @@ function isRecursive(inst, stack, resolve2) {
     // `$ZodLazy` caches its inner on the def, so a resolved edge is followed exactly
     case "lazy": {
       const inner = def._cachedInner ?? (resolve2 ? inst._zod.innerType : void 0);
-      merge2(inner ? isRecursive(inner, stack, false) : ASSUMED);
+      merge3(inner ? isRecursive(inner, stack, false) : ASSUMED);
       break;
     }
     // a leaf by choice: `parts` are regex fragments, not data positions
@@ -44638,9 +44638,9 @@ function anumArr(label, input2) {
 function chain(...args) {
   const id = (a) => a;
   const wrap = (a, b) => (c) => a(b(c));
-  const encode3 = args.map((x) => x.encode).reduceRight(wrap, id);
-  const decode4 = args.map((x) => x.decode).reduce(wrap, id);
-  return { encode: encode3, decode: decode4 };
+  const encode4 = args.map((x) => x.encode).reduceRight(wrap, id);
+  const decode5 = args.map((x) => x.decode).reduce(wrap, id);
+  return { encode: encode4, decode: decode5 };
 }
 // @__NO_SIDE_EFFECTS__
 function alphabet(letters) {
@@ -44838,7 +44838,7 @@ function genBech32(encoding) {
   const fromWords = _words.decode;
   const toWords = _words.encode;
   const fromWordsUnsafe = unsafeWrapper(fromWords);
-  function encode3(prefix, words, limit = 90) {
+  function encode4(prefix, words, limit = 90) {
     astr("bech32.encode prefix", prefix);
     if (isBytes3(words))
       words = Array.from(words);
@@ -44853,7 +44853,7 @@ function genBech32(encoding) {
     const sum = bechChecksum(lowered, words, ENCODING_CONST);
     return `${lowered}1${BECH_ALPHABET.encode(words)}${sum}`;
   }
-  function decode4(str, limit = 90) {
+  function decode5(str, limit = 90) {
     astr("bech32.decode input", str);
     const slen = str.length;
     if (slen < 8 || limit !== false && slen > limit)
@@ -44874,17 +44874,17 @@ function genBech32(encoding) {
       throw new Error(`Invalid checksum in ${str}: expected "${sum}"`);
     return { prefix, words };
   }
-  const decodeUnsafe = unsafeWrapper(decode4);
+  const decodeUnsafe = unsafeWrapper(decode5);
   function decodeToBytes(str) {
-    const { prefix, words } = decode4(str, false);
+    const { prefix, words } = decode5(str, false);
     return { prefix, words, bytes: fromWords(words) };
   }
   function encodeFromBytes(prefix, bytes) {
-    return encode3(prefix, toWords(bytes));
+    return encode4(prefix, toWords(bytes));
   }
   return {
-    encode: encode3,
-    decode: decode4,
+    encode: encode4,
+    decode: decode5,
     encodeFromBytes,
     decodeToBytes,
     decodeUnsafe,
@@ -45024,6 +45024,8 @@ var v2 = {
 };
 
 // src/domain/crypto.ts
+var kidOf = (key) => bytesToHex(sha256(key)).slice(0, 32);
+var orgKey = (key) => ({ kid: kidOf(key), key });
 function seal(content, d, key) {
   const json2 = JSON.stringify({ ...content, d });
   if (new TextEncoder().encode(json2).length > MAX_PLAINTEXT) throw new Error("This item is too large to save.");
@@ -45032,12 +45034,12 @@ function seal(content, d, key) {
 var kidTag = (event) => event.tags.find((t) => t[0] === "k")?.[1];
 var isEncrypted = (event) => event.tags.some((t) => t[0] === "k");
 var MAX_PLAINTEXT = 65535;
-function open2(event, keyring) {
+function open2(event, keyring2) {
   if (!event) return void 0;
   try {
     if (!isEncrypted(event)) return JSON.parse(event.content);
     const kid = kidTag(event);
-    const key = kid ? keyring?.get(kid) : void 0;
+    const key = kid ? keyring2?.get(kid) : void 0;
     if (!key) return void 0;
     const { d, ...content } = JSON.parse(v2.decrypt(event.content, key));
     return d === event.tags.find((t) => t[0] === "d")?.[1] ? content : void 0;
@@ -45169,7 +45171,134 @@ function blockedWrite(state, list, write2, today) {
 }
 
 // src/domain/keys.ts
+var emptyKeyrings = () => ({ keys: /* @__PURE__ */ new Map(), current: /* @__PURE__ */ new Map() });
+var envelopeD = (companyId, member) => `canban:key:${companyId}:${member}`;
 var keyringD = (pubkey) => `canban:keyring:${pubkey}`;
+function newOrgKey() {
+  return orgKey(crypto.getRandomValues(new Uint8Array(32)));
+}
+function flatten(keyrings) {
+  const all = /* @__PURE__ */ new Map();
+  for (const ring of keyrings.keys.values()) for (const [kid, key] of ring) all.set(kid, key);
+  return all;
+}
+var NOT_YET = "This organization can\u2019t be changed from here yet. Try again in a moment.";
+function writeKey(state, keyrings) {
+  if (state.locked) throw new Error(NOT_YET);
+  const seen = keyrings.current.get(state.company.id);
+  if (!state.kid) {
+    if (seen) throw new Error(NOT_YET);
+    return void 0;
+  }
+  const key = keyrings.keys.get(state.company.id)?.get(state.kid);
+  if (!key || seen && seen.at > (state.kidAt ?? 0)) throw new Error(NOT_YET);
+  return { kid: state.kid, key };
+}
+function noteCurrent(keyrings, state) {
+  if (!state.kid || state.kidAt === void 0) return false;
+  const seen = keyrings.current.get(state.company.id);
+  if (seen && seen.at >= state.kidAt) return false;
+  keyrings.current.set(state.company.id, { kid: state.kid, at: state.kidAt });
+  return true;
+}
+var encode3 = (ring) => Object.fromEntries([...ring].map(([kid, key]) => [kid, bytesToHex(key)]));
+function decode3(raw) {
+  const ring = /* @__PURE__ */ new Map();
+  if (!raw || typeof raw !== "object") return ring;
+  for (const [kid, hex3] of Object.entries(raw)) {
+    try {
+      const key = hexToBytes(String(hex3));
+      if (key.length === 32 && kidOf(key) === kid) ring.set(kid, key);
+    } catch {
+    }
+  }
+  return ring;
+}
+async function envelope(cipher, companyId, member, history, createdAt) {
+  return {
+    kind: KIND,
+    created_at: createdAt,
+    // The p tag lets the member's subscription find it.
+    tags: [["d", envelopeD(companyId, member)], ["t", APP_TAG], ["c", companyId], ["p", member]],
+    content: await cipher.encrypt(member, JSON.stringify(encode3(history)))
+  };
+}
+async function openEnvelope(cipher, event, state, me2) {
+  const d = event.tags.find((t) => t[0] === "d")?.[1];
+  if (event.kind !== KIND || d !== envelopeD(state.company.id, me2)) return /* @__PURE__ */ new Map();
+  if (!isAdmin(state, event.pubkey)) return /* @__PURE__ */ new Map();
+  try {
+    return decode3(JSON.parse(await cipher.decrypt(event.pubkey, event.content)));
+  } catch {
+    return /* @__PURE__ */ new Map();
+  }
+}
+async function keyring(cipher, me2, keyrings, createdAt) {
+  const content = {
+    keys: Object.fromEntries([...keyrings.keys].map(([companyId, ring]) => [companyId, encode3(ring)])),
+    current: Object.fromEntries(keyrings.current)
+  };
+  return {
+    kind: KIND,
+    created_at: createdAt,
+    tags: [["d", keyringD(me2)], ["t", APP_TAG]],
+    content: await cipher.encrypt(me2, JSON.stringify(content))
+  };
+}
+async function openKeyring(cipher, event, me2) {
+  const keyrings = emptyKeyrings();
+  const d = event.tags.find((t) => t[0] === "d")?.[1];
+  if (event.kind !== KIND || event.pubkey !== me2 || d !== keyringD(me2)) return keyrings;
+  try {
+    const raw = JSON.parse(await cipher.decrypt(me2, event.content));
+    for (const [companyId, ring] of Object.entries(raw.keys ?? {})) {
+      const keys = decode3(ring);
+      if (keys.size) keyrings.keys.set(companyId, keys);
+    }
+    for (const [companyId, c] of Object.entries(raw.current ?? {})) {
+      if (typeof c?.kid === "string" && typeof c.at === "number") keyrings.current.set(companyId, { kid: c.kid, at: c.at });
+    }
+  } catch {
+  }
+  return keyrings;
+}
+function mergeKeyrings(into, from) {
+  let changed = false;
+  for (const [companyId, ring] of from.keys) changed = merge2(into, companyId, ring) || changed;
+  for (const [companyId, c] of from.current) {
+    const seen = into.current.get(companyId);
+    if (seen && seen.at >= c.at) continue;
+    into.current.set(companyId, c);
+    changed = true;
+  }
+  return changed;
+}
+function merge2(keyrings, companyId, keys) {
+  const ring = keyrings.keys.get(companyId) ?? /* @__PURE__ */ new Map();
+  let added = false;
+  for (const [kid, key] of keys) {
+    if (ring.has(kid)) continue;
+    ring.set(kid, key);
+    added = true;
+  }
+  if (added) keyrings.keys.set(companyId, ring);
+  return added;
+}
+function recipients(state) {
+  return [.../* @__PURE__ */ new Set([ownerOf(state.company.id), ...state.members.map((m) => m.pubkey)])];
+}
+function rotation(state, keyrings, me2) {
+  if (state.locked || !isAdmin(state, me2)) throw new Error(NOT_YET);
+  const key = newOrgKey();
+  const history = new Map(keyrings.keys.get(state.company.id) ?? []);
+  history.set(key.kid, key.key);
+  const people = recipients(state);
+  return { key, history, company: companyWrite(state, people), recipients: people };
+}
+var companyWrite = (state, holders) => ({
+  address: { type: "company", companyId: state.company.id },
+  content: { name: state.company.name, holders }
+});
 
 // src/domain/profile.ts
 var profileD = (pubkey) => `canban:profile:${pubkey}`;
@@ -45198,11 +45327,11 @@ function companiesNaming(me2, event) {
 
 // src/domain/resolve.ts
 var MAX_ROLE_PASSES = 8;
-function resolve(events, keyring) {
+function resolve(events, keyring2) {
   const grouped = group(events);
   const result = /* @__PURE__ */ new Map();
   for (const [companyId, ce] of grouped) {
-    const state = resolveCompany(companyId, ce, keyring);
+    const state = resolveCompany(companyId, ce, keyring2);
     if (state) result.set(companyId, state);
   }
   return result;
@@ -45269,23 +45398,23 @@ var tag = (event, name) => event.tags.find((t) => t[0] === name);
 var removedTag = (event) => !!tag(event, "removed");
 var ROLES = ["admin", "member", "removed"];
 var validRole = (role) => ROLES.includes(role) ? role : void 0;
-function memberEntry(event, keyring) {
+function memberEntry(event, keyring2) {
   if (!event) return void 0;
-  const read = open2(event, keyring);
+  const read = open2(event, keyring2);
   const roleTag = tag(event, "role");
   const role = validRole(roleTag ? roleTag[1] : isEncrypted(event) ? void 0 : read?.role);
   const untagged = !event.tags.some((t) => t[0] === "p" && t[1]) || void 0;
   return role ? { role, name: typeof read?.name === "string" ? read.name : void 0, untagged } : void 0;
 }
 var hasAccessTags = (event) => isEncrypted(event) || event.tags.some((t) => t[0] === "role" || t[0] === "removed" || t[0] === "p" && !!t[1]);
-function resolveCompany(companyId, ce, keyring) {
+function resolveCompany(companyId, ce, keyring2) {
   const owner = ownerOf(companyId);
   const ownerEvent = latest(ce.company, (pk) => pk === owner);
   if (!ownerEvent) return void 0;
-  const ownerRead = open2(ownerEvent, keyring);
+  const ownerRead = open2(ownerEvent, keyring2);
   if (!isEncrypted(ownerEvent) && !ownerRead?.name) return void 0;
-  const roles = resolveRoles(owner, ce.members, keyring);
-  const ownerEntry = memberEntry(latest(ce.members.get(owner) ?? [], (pk) => pk === owner), keyring);
+  const roles = resolveRoles(owner, ce.members, keyring2);
+  const ownerEntry = memberEntry(latest(ce.members.get(owner) ?? [], (pk) => pk === owner), keyring2);
   const members2 = [{ pubkey: owner, role: "owner", name: ownerEntry?.name }];
   for (const [pubkey, entry] of roles) {
     if (entry.role !== "removed") members2.push({ pubkey, role: entry.role, name: entry.name, ...entry.untagged ? { untagged: true } : {} });
@@ -45297,11 +45426,11 @@ function resolveCompany(companyId, ce, keyring) {
     (pk) => admins.has(pk)
   );
   const companyEvent = encrypted ?? ownerEvent;
-  const read = companyEvent === ownerEvent ? ownerRead : open2(companyEvent, keyring);
+  const read = companyEvent === ownerEvent ? ownerRead : open2(companyEvent, keyring2);
   const company = { name: read?.name ?? "" };
   const companyLocked = !read;
   const kid = kidTag(companyEvent) || void 0;
-  const holders = kid ? holdersOf(ce.company, kid, admins, keyring) : [];
+  const holders = kid ? holdersOf(ce.company, kid, admins, keyring2) : [];
   const departed = holders.filter((pk) => !memberSet.has(pk));
   const rotationDue = departed.length > 0 && departed.every((pk) => ce.members.has(pk));
   const projects = [];
@@ -45310,7 +45439,7 @@ function resolveCompany(companyId, ce, keyring) {
   for (const [projectId, versions] of ce.projects) {
     const event = latest(versions, (pk) => admins.has(pk));
     if (!event) continue;
-    const p = open2(event, keyring);
+    const p = open2(event, keyring2);
     if (!p && !isEncrypted(event)) continue;
     if (removedTag(event) || p?.removed) continue;
     const listed = hasAccessTags(event) ? event.tags.filter((t) => t[0] === "p").map((t) => t[1]) : p?.members ?? [];
@@ -45322,7 +45451,7 @@ function resolveCompany(companyId, ce, keyring) {
     const projectLanes = [];
     for (const [laneId, lv] of ce.lanes.get(projectId) ?? []) {
       const laneEvent = latest(lv, allowed);
-      const l = open2(laneEvent, keyring);
+      const l = open2(laneEvent, keyring2);
       if (laneEvent && !l && isEncrypted(laneEvent) && !removedTag(laneEvent)) project.locked = true;
       if (l && !l.removed && !(laneEvent && removedTag(laneEvent))) projectLanes.push({ id: laneId, projectId, name: l.name, order: l.order });
     }
@@ -45332,7 +45461,7 @@ function resolveCompany(companyId, ce, keyring) {
     let highest = -1;
     for (const [taskId, tv] of ce.tasks.get(projectId) ?? []) {
       const event2 = latest(tv, allowed);
-      const t = open2(event2, keyring);
+      const t = open2(event2, keyring2);
       if (event2 && !t && isEncrypted(event2)) project.locked = true;
       if (event2 && t && Number.isInteger(t.number)) highest = Math.max(highest, t.number);
       if (!event2 || !t || t.removed || removedTag(event2) || projectLanes.length === 0) continue;
@@ -45362,25 +45491,25 @@ function resolveCompany(companyId, ce, keyring) {
   for (const t of tasks) t.dependsOn = [...new Set(t.dependsOn)].filter((id) => id !== t.id && projectOf2.get(id) === t.projectId);
   return { locked: companyLocked, kid, kidAt: kid ? companyEvent.created_at : void 0, ...kid ? { holders } : {}, ...rotationDue ? { rotationDue: true } : {}, company: { id: companyId, owner, name: company.name }, members: members2, projects, lanes, tasks };
 }
-function holdersOf(versions, kid, admins, keyring) {
+function holdersOf(versions, kid, admins, keyring2) {
   const holders = /* @__PURE__ */ new Set();
   for (const event of versions) {
     if (!admins.has(event.pubkey) || kidTag(event) !== kid) continue;
-    const listed = open2(event, keyring)?.holders;
+    const listed = open2(event, keyring2)?.holders;
     if (Array.isArray(listed)) {
       for (const pk of listed) if (typeof pk === "string") holders.add(pk);
     }
   }
   return [...holders];
 }
-function resolveRoles(owner, versions, keyring) {
+function resolveRoles(owner, versions, keyring2) {
   let admins = /* @__PURE__ */ new Set([owner]);
   let roles = /* @__PURE__ */ new Map();
   for (let pass = 0; pass < MAX_ROLE_PASSES; pass++) {
     roles = /* @__PURE__ */ new Map();
     for (const [pubkey, v] of versions) {
       if (pubkey === owner) continue;
-      const entry = memberEntry(latest(v, (pk) => admins.has(pk) && pk !== pubkey), keyring);
+      const entry = memberEntry(latest(v, (pk) => admins.has(pk) && pk !== pubkey), keyring2);
       if (entry?.role) roles.set(pubkey, entry);
     }
     const next = /* @__PURE__ */ new Set([owner, ...[...roles].filter(([, r]) => r.role === "admin").map(([pk]) => pk)]);
@@ -45411,6 +45540,9 @@ function checkBody(body) {
 }
 function write(address, content) {
   return { address, content };
+}
+function renameCompany(companyId, name, holders) {
+  return [write({ type: "company", companyId }, { name, ...holders ? { holders } : {} })];
 }
 function setMember(companyId, pubkey, role, name) {
   return [write({ type: "member", companyId, pubkey }, { role, ...name ? { name } : {} })];
@@ -45500,6 +45632,167 @@ function canWrite(state, project, pubkey) {
   return state.members.some((m) => m.pubkey === pubkey && m.role !== "member") || project.members.includes(pubkey);
 }
 
+// src/domain/keychain.ts
+var SYNC_MS = 300;
+var ROTATE_DELAY_MS = [5e3, 3e4];
+var Keychain = class {
+  constructor(host, pins) {
+    this.host = host;
+    for (const [companyId, pin] of pins ?? []) this.keyrings.current.set(companyId, pin);
+  }
+  host;
+  keyrings = emptyKeyrings();
+  opened = /* @__PURE__ */ new Set();
+  timer;
+  busy = false;
+  again = false;
+  stopped = false;
+  rotations = /* @__PURE__ */ new Map();
+  stop() {
+    this.stopped = true;
+    clearTimeout(this.timer);
+    this.rotations.forEach(clearTimeout);
+    this.rotations.clear();
+  }
+  // Call whenever events arrive; passes are debounced.
+  schedule() {
+    if (this.stopped) return;
+    clearTimeout(this.timer);
+    this.timer = setTimeout(() => void this.sync(), SYNC_MS);
+  }
+  // The key to encrypt a write to this organization with; throws when it can't be written yet.
+  keyFor(state) {
+    return writeKey(state, this.keyrings);
+  }
+  // A new organization's key: held at once, so its first writes are encrypted with it.
+  adopt(companyId, key) {
+    merge2(this.keyrings, companyId, /* @__PURE__ */ new Map([[key.kid, key.key]]));
+    this.host.setKeys(flatten(this.keyrings));
+  }
+  // Puts a new organization's key in its owner's own envelope and keyring.
+  async share(companyId, key) {
+    const cipher = this.host.cipher();
+    if (!cipher) return;
+    const me2 = this.host.me;
+    await this.publish(await envelope(cipher, companyId, me2, /* @__PURE__ */ new Map([[key.kid, key.key]]), this.host.nextTimestamp(envelopeD(companyId, me2))));
+    await this.saveKeyring(cipher);
+  }
+  async sync() {
+    if (this.stopped) return;
+    if (this.busy) {
+      this.again = true;
+      return;
+    }
+    const companies = this.host.companies();
+    if (!companies) return;
+    if (![...companies.values()].some((s) => s.kid || s.locked)) return this.host.report("ok");
+    const cipher = this.host.cipher();
+    if (!cipher) return this.host.report("cant-decrypt");
+    this.busy = true;
+    try {
+      await this.open(cipher, companies);
+      this.host.report("ok");
+      await this.duties(cipher, this.host.companies() ?? companies);
+    } catch (error62) {
+      this.host.report("failed", error62);
+    } finally {
+      this.busy = false;
+      if (this.again) {
+        this.again = false;
+        this.schedule();
+      }
+    }
+  }
+  // Reads the keyring, then any envelope for a key still missing.
+  async open(cipher, companies) {
+    const me2 = this.host.me;
+    let changed = false;
+    let save = false;
+    for (const event of this.host.versions(keyringD(me2))) {
+      if (this.opened.has(event.id)) continue;
+      this.opened.add(event.id);
+      changed = mergeKeyrings(this.keyrings, await openKeyring(cipher, event, me2)) || changed;
+    }
+    for (const state of companies.values()) {
+      const id = state.company.id;
+      if (!state.kid || this.keyrings.keys.get(id)?.has(state.kid)) continue;
+      for (const event of this.host.versions(envelopeD(id, me2))) {
+        if (this.opened.has(event.id)) continue;
+        const keys = await openEnvelope(cipher, event, state, me2);
+        if (keys.size || isAdmin(state, event.pubkey)) this.opened.add(event.id);
+        if (merge2(this.keyrings, id, keys)) changed = save = true;
+      }
+    }
+    let pinned = false;
+    for (const state of companies.values()) pinned = noteCurrent(this.keyrings, state) || pinned;
+    if (pinned) this.host.savePins?.(this.keyrings.current);
+    if (changed) this.host.setKeys(flatten(this.keyrings));
+    if (save) await this.saveKeyring(cipher);
+  }
+  // What an admin's client does unasked: hand the key to new members, replace it after a removal.
+  async duties(cipher, companies) {
+    const me2 = this.host.me;
+    for (const state of companies.values()) {
+      const id = state.company.id;
+      if (!state.kid || state.locked || !isAdmin(state, me2) || !this.keyrings.keys.get(id)?.has(state.kid)) continue;
+      if (state.rotationDue) {
+        this.planRotation(state);
+        continue;
+      }
+      const holders = state.holders ?? [];
+      const missing = state.members.map((m) => m.pubkey).filter((pk) => !holders.includes(pk));
+      if (!missing.length) continue;
+      const [{ address, content }] = renameCompany(id, state.company.name, [...holders, ...missing]);
+      await this.publish(template(address, content, this.host.nextTimestamp(`canban:company:${id}`), this.keyFor(state)));
+      const history = this.keyrings.keys.get(id);
+      for (const pk of missing) await this.publish(await envelope(cipher, id, pk, history, this.host.nextTimestamp(envelopeD(id, pk))));
+    }
+  }
+  planRotation(state) {
+    const id = state.company.id;
+    if (this.rotations.has(id)) return;
+    const [min, max] = ROTATE_DELAY_MS;
+    const delay = state.company.owner === this.host.me ? 0 : min + Math.random() * (max - min);
+    this.rotations.set(
+      id,
+      setTimeout(() => {
+        this.rotations.delete(id);
+        void this.rotate(id);
+      }, delay)
+    );
+  }
+  async rotate(companyId) {
+    const state = this.host.companies()?.get(companyId);
+    const cipher = this.host.cipher();
+    if (this.stopped || !state?.rotationDue || !cipher) return;
+    if (this.busy) return this.planRotation(state);
+    this.busy = true;
+    try {
+      const r = rotation(state, this.keyrings, this.host.me);
+      merge2(this.keyrings, companyId, r.history);
+      this.host.setKeys(flatten(this.keyrings));
+      await this.saveKeyring(cipher);
+      const { address, content } = r.company;
+      await this.publish(template(address, content, this.host.nextTimestampIn(companyId), r.key));
+      for (const pk of r.recipients) await this.publish(await envelope(cipher, companyId, pk, r.history, this.host.nextTimestamp(envelopeD(companyId, pk))));
+    } catch (error62) {
+      this.host.report("failed", error62);
+    } finally {
+      this.busy = false;
+      this.schedule();
+    }
+  }
+  async saveKeyring(cipher) {
+    const me2 = this.host.me;
+    const event = await this.host.sign(await keyring(cipher, me2, this.keyrings, this.host.nextTimestamp(keyringD(me2))));
+    this.opened.add(event.id);
+    await this.host.send(event);
+  }
+  async publish(unsigned) {
+    await this.host.send(await this.host.sign(unsigned));
+  }
+};
+
 // src/board.ts
 var READY_TIMEOUT = 1e4;
 var RETRY_MS = 3e3;
@@ -45514,6 +45807,28 @@ var Board = class {
     this.profileRelays = profileRelays;
     this.me = getPublicKey2(secret);
     this.pool.automaticallyAuth = () => (event) => Promise.resolve(finalizeEvent2(event, this.secret));
+    const conversation = (peer) => v2.utils.getConversationKey(this.secret, peer);
+    this.keychain = new Keychain({
+      me: this.me,
+      companies: () => this.loaded ? this.companies() : void 0,
+      versions: (d) => [...this.events.values()].filter((e) => e.tags.some((t) => t[0] === "d" && t[1] === d)),
+      cipher: () => ({
+        encrypt: async (peer, text) => v2.encrypt(text, conversation(peer)),
+        decrypt: async (peer, text) => v2.decrypt(text, conversation(peer))
+      }),
+      sign: async (unsigned) => finalizeEvent2(unsigned, this.secret),
+      send: (event) => this.send(event),
+      nextTimestamp: (d) => this.nextTimestamp(d),
+      nextTimestampIn: (companyId) => {
+        let newest = 0;
+        for (const [d, at] of this.newestByD) if (d.includes(`:${companyId}`)) newest = Math.max(newest, at);
+        return Math.max(Math.floor(Date.now() / 1e3), newest + 1);
+      },
+      setKeys: (keys) => this.keys = keys,
+      report: (outcome, error62) => {
+        if (outcome === "failed") this.lastError = `Organization keys: ${error62 instanceof Error ? error62.message : String(error62)}`;
+      }
+    });
   }
   relay;
   secret;
@@ -45539,6 +45854,9 @@ var Board = class {
   // relay caps results per filter before filtering them per agent).
   known = /* @__PURE__ */ new Set();
   recheck;
+  // Organization keys this agent holds, opened from its envelopes and keyring (domain/keychain.ts).
+  keys = /* @__PURE__ */ new Map();
+  keychain;
   subscriptionKey() {
     return `${visibilityKey(this.companies(), this.me)}|${[...this.known].sort().join(",")}`;
   }
@@ -45573,6 +45891,7 @@ var Board = class {
     });
   }
   stop() {
+    this.keychain.stop();
     this.closed = true;
     clearTimeout(this.recheck);
     this.sub?.close();
@@ -45584,11 +45903,11 @@ var Board = class {
       this.sub?.close();
       this.start();
     }
-    if (this.loaded) return;
-    await Promise.race([new Promise((r) => this.waiters.push(r)), new Promise((r) => setTimeout(r, READY_TIMEOUT))]);
+    if (!this.loaded) await Promise.race([new Promise((r) => this.waiters.push(r)), new Promise((r) => setTimeout(r, READY_TIMEOUT))]);
+    await this.keychain.sync();
   }
   companies() {
-    return resolve(this.events.values());
+    return resolve(this.events.values(), this.keys);
   }
   subscriptions() {
     return subscriptionListOf(this.events.values());
@@ -45602,15 +45921,20 @@ var Board = class {
       if (blocked) throw new Error(blocked);
     }
     for (const { address, content } of writes) {
-      const d = dOf(address);
-      const createdAt = Math.max(Math.floor(Date.now() / 1e3), (this.newestByD.get(d) ?? 0) + 1);
-      const event = finalizeEvent2(template(address, content, createdAt), this.secret);
-      this.add(event);
-      await Promise.any(this.pool.publish([this.relay], event, { onauth: async (e) => finalizeEvent2(e, this.secret) })).catch((error62) => {
-        const reason = error62 instanceof AggregateError ? error62.errors[0] : error62;
-        throw new Error(`The relay refused the write: ${reason instanceof Error ? reason.message : String(reason)}`);
-      });
+      const state = companies.get(address.companyId);
+      const key = state && this.keychain.keyFor(state);
+      await this.send(finalizeEvent2(template(address, content, this.nextTimestamp(dOf(address)), key), this.secret));
     }
+  }
+  nextTimestamp(d) {
+    return Math.max(Math.floor(Date.now() / 1e3), (this.newestByD.get(d) ?? 0) + 1);
+  }
+  async send(event) {
+    this.add(event);
+    await Promise.any(this.pool.publish([this.relay], event, { onauth: async (e) => finalizeEvent2(e, this.secret) })).catch((error62) => {
+      const reason = error62 instanceof AggregateError ? error62.errors[0] : error62;
+      throw new Error(`The relay refused the write: ${reason instanceof Error ? reason.message : String(reason)}`);
+    });
   }
   async names(pubkeys) {
     const missing = pubkeys.filter((pk) => !this.profiles.has(pk));
@@ -45635,6 +45959,7 @@ var Board = class {
     const d = event.tags.find((t) => t[0] === "d")?.[1];
     if (d) this.newestByD.set(d, Math.max(this.newestByD.get(d) ?? 0, event.created_at));
     for (const c of companiesNaming(this.me, event)) this.known.add(c);
+    this.keychain.schedule();
     if (this.loaded) this.scheduleRecheck();
   }
   // The relay only serves what this agent may see, so gaining a company or project means
@@ -46797,7 +47122,7 @@ __export2(nip19_exports, {
   BECH32_REGEX: () => BECH32_REGEX,
   Bech32MaxSize: () => Bech32MaxSize,
   NostrTypeGuard: () => NostrTypeGuard,
-  decode: () => decode3,
+  decode: () => decode4,
   decodeNostrURI: () => decodeNostrURI,
   encodeBytes: () => encodeBytes,
   naddrEncode: () => naddrEncode,
@@ -46830,12 +47155,12 @@ function decodeNostrURI(nip19code) {
   try {
     if (nip19code.startsWith("nostr:"))
       nip19code = nip19code.substring(6);
-    return decode3(nip19code);
+    return decode4(nip19code);
   } catch (_err) {
     return { type: "invalid", data: null };
   }
 }
-function decode3(code) {
+function decode4(code) {
   let { prefix, words } = bech32.decode(code, Bech32MaxSize);
   let data = new Uint8Array(bech32.fromWords(words));
   switch (prefix) {
@@ -47473,14 +47798,14 @@ function unwrapManyEvents(wrappedEvents, recipientPrivateKey) {
   unwrappedEvents.sort((a, b) => a.created_at - b.created_at);
   return unwrappedEvents;
 }
-function createEvent(recipients, message, conversationTitle, replyTo) {
+function createEvent(recipients2, message, conversationTitle, replyTo) {
   const baseEvent = {
     created_at: Math.ceil(Date.now() / 1e3),
     kind: PrivateDirectMessage,
     tags: [],
     content: message
   };
-  const recipientsArray = Array.isArray(recipients) ? recipients : [recipients];
+  const recipientsArray = Array.isArray(recipients2) ? recipients2 : [recipients2];
   recipientsArray.forEach(({ publicKey, relayUrl }) => {
     baseEvent.tags.push(relayUrl ? ["p", publicKey, relayUrl] : ["p", publicKey]);
   });
@@ -47496,12 +47821,12 @@ function wrapEvent2(senderPrivateKey, recipient, message, conversationTitle, rep
   const event = createEvent(recipient, message, conversationTitle, replyTo);
   return wrapEvent(event, senderPrivateKey, recipient.publicKey);
 }
-function wrapManyEvents2(senderPrivateKey, recipients, message, conversationTitle, replyTo) {
-  if (!recipients || recipients.length === 0) {
+function wrapManyEvents2(senderPrivateKey, recipients2, message, conversationTitle, replyTo) {
+  if (!recipients2 || recipients2.length === 0) {
     throw new Error("At least one recipient is required.");
   }
   const senderPublicKey = getPublicKey3(senderPrivateKey);
-  return [{ publicKey: senderPublicKey }, ...recipients].map(
+  return [{ publicKey: senderPublicKey }, ...recipients2].map(
     (recipient) => wrapEvent2(senderPrivateKey, recipient, message, conversationTitle, replyTo)
   );
 }
@@ -47593,7 +47918,7 @@ function parse22(uri) {
   return {
     uri: match[0],
     value: match[1],
-    decoded: decode3(match[1])
+    decoded: decode4(match[1])
   };
 }
 var nip22_exports = {};
@@ -47827,7 +48152,7 @@ function* parse4(content) {
         const end = m ? u + 60 + m.index : max;
         try {
           let pointer;
-          let { data, type } = decode3(content.slice(u + 1, end));
+          let { data, type } = decode4(content.slice(u + 1, end));
           switch (type) {
             case "npub":
               pointer = { pubkey: data };

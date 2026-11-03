@@ -9,6 +9,9 @@ import { canbanFilters, companiesNaming } from './domain/subscription'
 import { resolve } from './domain/resolve'
 import { renumberings, retaggings, type Write } from './domain/commands'
 import { blockedWrite, subscriptionListOf, type SubscriptionList } from './domain/entitlements'
+import * as nip44 from 'nostr-tools/nip44'
+import type { Keyring } from './domain/crypto'
+import { Keychain } from './domain/keychain'
 
 export type Connection = 'connecting' | 'live' | 'denied' | 'offline'
 
@@ -46,6 +49,9 @@ export class Board {
   // relay caps results per filter before filtering them per agent).
   private known = new Set<string>()
   private recheck?: ReturnType<typeof setTimeout>
+  // Organization keys this agent holds, opened from its envelopes and keyring (domain/keychain.ts).
+  private keys: Keyring = new Map()
+  private keychain: Keychain
 
   constructor(
     private relay: string,
@@ -54,6 +60,28 @@ export class Board {
   ) {
     this.me = getPublicKey(secret)
     this.pool.automaticallyAuth = () => (event) => Promise.resolve(finalizeEvent(event, this.secret))
+    const conversation = (peer: string) => nip44.v2.utils.getConversationKey(this.secret, peer)
+    this.keychain = new Keychain({
+      me: this.me,
+      companies: () => (this.loaded ? this.companies() : undefined),
+      versions: (d) => [...this.events.values()].filter((e) => e.tags.some((t) => t[0] === 'd' && t[1] === d)),
+      cipher: () => ({
+        encrypt: async (peer, text) => nip44.v2.encrypt(text, conversation(peer)),
+        decrypt: async (peer, text) => nip44.v2.decrypt(text, conversation(peer)),
+      }),
+      sign: async (unsigned) => finalizeEvent(unsigned, this.secret),
+      send: (event) => this.send(event),
+      nextTimestamp: (d) => this.nextTimestamp(d),
+      nextTimestampIn: (companyId) => {
+        let newest = 0
+        for (const [d, at] of this.newestByD) if (d.includes(`:${companyId}`)) newest = Math.max(newest, at)
+        return Math.max(Math.floor(Date.now() / 1000), newest + 1)
+      },
+      setKeys: (keys) => (this.keys = keys),
+      report: (outcome, error) => {
+        if (outcome === 'failed') this.lastError = `Organization keys: ${error instanceof Error ? error.message : String(error)}`
+      },
+    })
   }
 
   private subscriptionKey(): string {
@@ -93,6 +121,7 @@ export class Board {
   }
 
   stop(): void {
+    this.keychain.stop()
     this.closed = true
     clearTimeout(this.recheck)
     this.sub?.close()
@@ -105,12 +134,13 @@ export class Board {
       this.sub?.close()
       this.start()
     }
-    if (this.loaded) return
-    await Promise.race([new Promise<void>((r) => this.waiters.push(r)), new Promise<void>((r) => setTimeout(r, READY_TIMEOUT))])
+    if (!this.loaded) await Promise.race([new Promise<void>((r) => this.waiters.push(r)), new Promise<void>((r) => setTimeout(r, READY_TIMEOUT))])
+    // Opens any organization key that arrived, so encrypted boards read at once.
+    await this.keychain.sync()
   }
 
   companies(): Map<string, CompanyState> {
-    return resolve(this.events.values())
+    return resolve(this.events.values(), this.keys)
   }
 
   subscriptions(): SubscriptionList | undefined {
@@ -126,15 +156,23 @@ export class Board {
       if (blocked) throw new Error(blocked)
     }
     for (const { address, content } of writes) {
-      const d = dOf(address)
-      const createdAt = Math.max(Math.floor(Date.now() / 1000), (this.newestByD.get(d) ?? 0) + 1)
-      const event = finalizeEvent(template(address, content as never, createdAt), this.secret)
-      this.add(event)
-      await Promise.any(this.pool.publish([this.relay], event, { onauth: async (e) => finalizeEvent(e, this.secret) })).catch((error: unknown) => {
-        const reason = error instanceof AggregateError ? error.errors[0] : error
-        throw new Error(`The relay refused the write: ${reason instanceof Error ? reason.message : String(reason)}`)
-      })
+      const state = companies.get(address.companyId)
+      // Encrypted with the organization's current key; refused while this agent can't open it.
+      const key = state && this.keychain.keyFor(state)
+      await this.send(finalizeEvent(template(address, content as never, this.nextTimestamp(dOf(address)), key), this.secret))
     }
+  }
+
+  private nextTimestamp(d: string): number {
+    return Math.max(Math.floor(Date.now() / 1000), (this.newestByD.get(d) ?? 0) + 1)
+  }
+
+  private async send(event: NostrEvent): Promise<void> {
+    this.add(event)
+    await Promise.any(this.pool.publish([this.relay], event, { onauth: async (e) => finalizeEvent(e, this.secret) })).catch((error: unknown) => {
+      const reason = error instanceof AggregateError ? error.errors[0] : error
+      throw new Error(`The relay refused the write: ${reason instanceof Error ? reason.message : String(reason)}`)
+    })
   }
 
   async names(pubkeys: string[]): Promise<Map<string, string>> {
@@ -161,6 +199,7 @@ export class Board {
     const d = event.tags.find((t) => t[0] === 'd')?.[1]
     if (d) this.newestByD.set(d, Math.max(this.newestByD.get(d) ?? 0, event.created_at))
     for (const c of companiesNaming(this.me, event)) this.known.add(c)
+    this.keychain.schedule()
     if (this.loaded) this.scheduleRecheck()
   }
 
