@@ -75,7 +75,8 @@ export class Board {
       nextTimestamp: (d) => this.nextTimestamp(d),
       nextTimestampIn: (companyId) => {
         let newest = 0
-        for (const [d, at] of this.newestByD) if (d.includes(`:${companyId}`)) newest = Math.max(newest, at)
+        // Join requests are written by outsiders, who could date them far ahead.
+        for (const [d, at] of this.newestByD) if (d.includes(`:${companyId}`) && !d.startsWith('canban:request:')) newest = Math.max(newest, at)
         return Math.max(Math.floor(Date.now() / 1000), newest + 1)
       },
       setKeys: (keys) => (this.keys = keys),

@@ -45426,6 +45426,8 @@ function canbanFilters(me2, companyIds, people) {
     // My own writes: organizations I own, my profile.
     { ...base, authors: [me2] },
     ...[...new Set(companyIds)].sort().map((c) => ({ ...base, "#c": [c] })),
+    // Join requests, which the relay shows only to admins (src/domain/requests.ts).
+    ...new Set(companyIds).size ? [{ ...base, "#r": [...new Set(companyIds)].sort() }] : [],
     // The keyring is rarely rewritten, so the authors filter (newest first, capped) can miss it.
     { ...base, "#d": [SUBSCRIPTIONS_D, keyringD(me2)] },
     ...profiles.length ? [{ ...base, "#d": profiles }] : []
@@ -45936,7 +45938,7 @@ var Board = class {
       nextTimestamp: (d) => this.nextTimestamp(d),
       nextTimestampIn: (companyId) => {
         let newest = 0;
-        for (const [d, at] of this.newestByD) if (d.includes(`:${companyId}`)) newest = Math.max(newest, at);
+        for (const [d, at] of this.newestByD) if (d.includes(`:${companyId}`) && !d.startsWith("canban:request:")) newest = Math.max(newest, at);
         return Math.max(Math.floor(Date.now() / 1e3), newest + 1);
       },
       setKeys: (keys) => this.keys = keys,

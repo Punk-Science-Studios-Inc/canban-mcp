@@ -16,6 +16,8 @@ export function canbanFilters(me: string, companyIds: Iterable<string>, people: 
     // My own writes: organizations I own, my profile.
     { ...base, authors: [me] },
     ...[...new Set(companyIds)].sort().map((c) => ({ ...base, '#c': [c] })),
+    // Join requests, which the relay shows only to admins (src/domain/requests.ts).
+    ...(new Set(companyIds).size ? [{ ...base, '#r': [...new Set(companyIds)].sort() }] : []),
     // The keyring is rarely rewritten, so the authors filter (newest first, capped) can miss it.
     { ...base, '#d': [SUBSCRIPTIONS_D, keyringD(me)] },
     ...(profiles.length ? [{ ...base, '#d': profiles }] : []),
