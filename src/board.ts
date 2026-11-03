@@ -65,6 +65,7 @@ export class Board {
       me: this.me,
       companies: () => (this.loaded ? this.companies() : undefined),
       versions: (d) => [...this.events.values()].filter((e) => e.tags.some((t) => t[0] === 'd' && t[1] === d)),
+      eventsIn: (companyId) => [...this.events.values()].filter((e) => e.tags.some((t) => t[0] === 'd' && t[1].split(':')[2] === companyId)),
       cipher: () => ({
         encrypt: async (peer, text) => nip44.v2.encrypt(text, conversation(peer)),
         decrypt: async (peer, text) => nip44.v2.decrypt(text, conversation(peer)),

@@ -1,11 +1,12 @@
 import type { EventTemplate, NostrEvent } from 'nostr-tools'
 import * as commands from './commands'
-import { kidTag, open, type Keyring, type OrgKey } from './crypto'
-import { template, type CompanyContent } from './entities'
+import { isEncrypted, kidTag, open, orgKey, type Keyring, type OrgKey } from './crypto'
+import { dOf, template, type CompanyContent } from './entities'
 import {
   emptyKeyrings,
   envelope,
   envelopeD,
+  envelopeKids,
   flatten,
   keyring,
   keyringD,
@@ -19,6 +20,8 @@ import {
   type Cipher,
   type Keyrings,
 } from './keys'
+import { reencryptions } from './migration'
+import { movedTemplate, orgProfileD, profileD, profilesOf, profileTemplate, sameProfile } from './profile'
 import { isAdmin, type CompanyState } from './model'
 
 // Opens, hands out and replaces organization keys in the background, so nobody ever sees one
@@ -32,6 +35,8 @@ export interface KeychainHost {
   companies(): Map<string, CompanyState> | undefined
   // Versions held of one address.
   versions(d: string): NostrEvent[]
+  // Every event held for one organization.
+  eventsIn(companyId: string): NostrEvent[]
   // NIP-44 with the person's key, or undefined when their signer can't.
   cipher(): Cipher | undefined
   sign(unsigned: EventTemplate): Promise<NostrEvent>
@@ -54,6 +59,11 @@ const MAX_TRIES = 3
 // Admins other than the owner wait a little before replacing a key, so usually only one does.
 const ROTATE_DELAY_MS = [5_000, 30_000]
 const BUSY_RETRY_MS = 2_000
+const FIRST_KEY_SPREAD_MS = 5_000
+// Items left in plaintext from before an organization was encrypted are written again this many at a
+// time, then a pause: 60 a minute, the relay's limit for keys that aren't relay members.
+const REENCRYPT_BATCH = 30
+const REENCRYPT_PAUSE_MS = 30_000
 
 class Stopped extends Error {}
 // The relay refused a write: not the signer's fault, and retried only after REFUSED_BACKOFF_MS.
@@ -73,6 +83,9 @@ export class Keychain {
   private again = false
   private stopped = false
   private rotations = new Map<string, ReturnType<typeof setTimeout>>()
+  // Organizations being re-encrypted, and when the next batch may go.
+  private reencrypting = new Map<string, number>()
+  private keyringStale = false
 
   constructor(
     private host: KeychainHost,
@@ -139,9 +152,11 @@ export class Keychain {
   private async pass(): Promise<void> {
     const companies = this.host.companies()
     if (!companies) return
-    if (![...companies.values()].some((s) => s.kid || s.locked)) return this.host.report('ok')
+    const encrypted = [...companies.values()].some((s) => s.kid || s.locked)
+    if (!encrypted && ![...companies.values()].some((s) => this.unencrypted(s))) return this.host.report('ok')
     const cipher = this.host.cipher()
-    if (!cipher) return this.host.report('cant-decrypt')
+    // A sign-in that can't encrypt leaves plaintext organizations as they are.
+    if (!cipher) return this.host.report(encrypted ? 'cant-decrypt' : 'ok')
     try {
       const failed = await this.open(cipher, companies)
       this.check()
@@ -152,6 +167,7 @@ export class Keychain {
       }
       this.host.report('ok')
       await this.duties(cipher, this.host.companies() ?? companies)
+      await this.profiles(this.host.companies() ?? companies)
     } catch (error) {
       if (error instanceof Stopped) return
       // A refused keyring save isn't the signer's fault: no phone message.
@@ -166,7 +182,10 @@ export class Keychain {
     for (const event of this.host.versions(keyringD(this.host.me))) {
       if (this.givenUp.has(event.id)) throw new Error('Your saved keys could not be read this session.')
       if (this.opened.has(event.id)) continue
-      changed = mergeKeyrings(this.keyrings, await this.attempt(event.id, () => openKeyring(cipher, event, this.host.me))) || changed
+      const copy = await this.attempt(event.id, () => openKeyring(cipher, event, this.host.me))
+      // Another tab or device saved over a key held here: it must be saved again or it is lost.
+      if (lacks(copy, this.keyrings)) this.keyringStale = true
+      changed = mergeKeyrings(this.keyrings, copy) || changed
       this.opened.add(event.id)
     }
     return changed
@@ -189,7 +208,11 @@ export class Keychain {
     let found = false
     for (const state of companies.values()) {
       const id = state.company.id
-      if (!state.kid || this.keyrings.keys.get(id)?.has(state.kid)) continue
+      // Envelopes are opened while the current key, or any key an item here names, is missing: two
+      // admins giving an organization its first key at once each hand theirs out.
+      const held = this.keyrings.keys.get(id)
+      const missing = (kid?: string) => !!kid && !held?.has(kid)
+      if (!state.kid || (!missing(state.kid) && !this.host.eventsIn(id).some((e) => missing(kidTag(e))))) continue
       for (const event of this.host.versions(envelopeD(id, me))) {
         if (this.opened.has(event.id) || this.givenUp.has(event.id)) continue
         try {
@@ -208,7 +231,7 @@ export class Keychain {
     if (pinned) this.host.savePins?.(this.keyrings.current)
     if (changed) this.setKeys()
     // Saved only once every copy of the keyring is merged in: saving replaces it.
-    if (found && keyringRead) await this.saveKeyring(cipher)
+    if ((found || this.keyringStale) && keyringRead) await this.saveKeyring(cipher)
     return failed
   }
 
@@ -245,6 +268,8 @@ export class Keychain {
   private async duty(cipher: Cipher, state: CompanyState): Promise<void> {
     const me = this.host.me
     const id = state.company.id
+    // An organization from before encryption gets its first key the way a removal gets a new one.
+    if (this.unencrypted(state)) return this.planRotation(state)
     if (!state.kid || state.locked || !isAdmin(state, me) || !this.keyrings.keys.get(id)?.has(state.kid)) return
     if (state.rotationDue) return this.planRotation(state)
     const holders = state.holders ?? []
@@ -262,6 +287,75 @@ export class Keychain {
       if (this.sentTo(id, pk, state.kid)) continue
       await this.publish(await envelope(cipher, id, pk, history, this.host.nextTimestamp(envelopeD(id, pk)), state.kid))
     }
+    await this.reencrypt(state, key!)
+  }
+
+  // My profile goes into every encrypted organization I'm in, encrypted with its key; once all of them
+  // hold it, the plaintext copy from before encryption is emptied (src/domain/profile.ts).
+  private async profiles(companies: Map<string, CompanyState>): Promise<void> {
+    const me = this.host.me
+    const keys = flatten(this.keyrings)
+    const mine = (d: string) => this.host.versions(d).filter((e) => e.pubkey === me)
+    const joined = [...companies.values()].filter((s) => s.members.some((m) => m.pubkey === me))
+    const current = profilesOf([...mine(profileD(me)), ...joined.flatMap((s) => mine(orgProfileD(s.company.id, me)))], keys).get(me)
+    if (!current || !joined.length) return
+    let everywhere = true
+    for (const state of joined) {
+      const id = state.company.id
+      let key: OrgKey | undefined
+      try {
+        key = this.keyFor(state)
+      } catch {
+        key = undefined
+      }
+      if (!key || (this.backoff.get(id) ?? 0) > Date.now()) {
+        everywhere = false
+        continue
+      }
+      const copy = profilesOf(mine(orgProfileD(id, me)), keys).get(me)
+      if (copy && sameProfile(copy, current)) continue
+      try {
+        await this.publish(profileTemplate(me, current, this.host.nextTimestamp(orgProfileD(id, me)), { companyId: id, key }))
+      } catch (error) {
+        if (!(error instanceof Refused)) throw error
+        this.backoff.set(id, Date.now() + REFUSED_BACKOFF_MS)
+        everywhere = false
+      }
+    }
+    const plain = mine(profileD(me)).sort((a, b) => b.created_at - a.created_at)[0]
+    if (everywhere && plain && profilesOf([plain]).size) await this.publish(movedTemplate(me, this.host.nextTimestamp(profileD(me))))
+  }
+
+  // A plaintext organization this admin can encrypt. Any sign that it is encrypted already (an
+  // encrypted event, an envelope, a key id seen named) means the newest company event hasn't arrived,
+  // and a second key must not be made.
+  private unencrypted(state: CompanyState): boolean {
+    const id = state.company.id
+    if (state.kid || state.locked || !isAdmin(state, this.host.me) || this.keyrings.current.has(id)) return false
+    return !this.host.eventsIn(id).some((e) => isEncrypted(e) || e.tags.some((t) => t[0] === 'd' && t[1].startsWith('canban:key:')))
+  }
+
+  // Writes the next batch of items still in plaintext again, encrypted, then waits before the next.
+  private async reencrypt(state: CompanyState, key: OrgKey): Promise<void> {
+    const id = state.company.id
+    const wait = (this.reencrypting.get(id) ?? 0) - Date.now()
+    if (wait > 0) return this.schedule(wait)
+    const writes = reencryptions(state, this.host.eventsIn(id), this.host.me)
+    if (!writes.length) return void this.reencrypting.delete(id)
+    this.reencrypting.set(id, Date.now() + REENCRYPT_PAUSE_MS)
+    let sent = 0
+    for (const { address, content } of writes) {
+      if (sent === REENCRYPT_BATCH) return this.schedule(REENCRYPT_PAUSE_MS)
+      let unsigned: EventTemplate
+      try {
+        unsigned = template(address, content as never, this.host.nextTimestamp(dOf(address)), key)
+      } catch {
+        // Too large to encrypt: it stays as it is, and the relay keeps its plaintext.
+        continue
+      }
+      await this.publish(unsigned)
+      sent++
+    }
   }
 
   // The holders named by this admin's own newest company event for the key.
@@ -274,16 +368,22 @@ export class Keychain {
     return Array.isArray(holders) ? holders.filter((pk) => typeof pk === 'string') : []
   }
 
-  // Whether this admin has already sent `pk` an envelope carrying the key.
+  // Whether this admin has already sent `pk` an envelope carrying the key and every older one held
+  // here, so a key another tab's envelope left out is handed out again.
   private sentTo(companyId: string, pk: string, kid: string): boolean {
-    return this.host.versions(envelopeD(companyId, pk)).some((e) => e.pubkey === this.host.me && kidTag(e) === kid)
+    const held = [...(this.keyrings.keys.get(companyId)?.keys() ?? [])]
+    return this.host
+      .versions(envelopeD(companyId, pk))
+      .some((e) => e.pubkey === this.host.me && kidTag(e) === kid && held.every((k) => envelopeKids(e).includes(k)))
   }
 
   private planRotation(state: CompanyState, delay?: number): void {
     const id = state.company.id
     if (this.rotations.has(id)) return
     const [min, max] = ROTATE_DELAY_MS
-    const wait = delay ?? (state.company.owner === this.host.me ? 0 : min + Math.random() * (max - min))
+    // The owner's tabs and devices each spread a first key out a little, so usually one makes it.
+    const owner = state.company.owner === this.host.me ? (state.rotationDue ? 0 : Math.random() * FIRST_KEY_SPREAD_MS) : undefined
+    const wait = delay ?? owner ?? min + Math.random() * (max - min)
     this.rotations.set(
       id,
       setTimeout(() => {
@@ -297,15 +397,20 @@ export class Keychain {
     const state = this.host.companies()?.get(companyId)
     const cipher = this.host.cipher()
     // Another admin may have replaced it meanwhile.
-    if (this.stopped || !state?.rotationDue || !cipher) return
+    if (this.stopped || !state || !(state.rotationDue || this.unencrypted(state)) || !cipher) return
     if (this.running) return this.planRotation(state, BUSY_RETRY_MS)
     const run = (async () => {
-      const r = rotation(state, this.keyrings, this.host.me)
-      // Saved before anything names the new key, so it can't be lost.
       await this.readKeyrings(cipher)
-      merge(this.keyrings, companyId, r.history)
-      await this.saveKeyring(cipher)
+      // A first key one of my other tabs or devices already saved is used again, never a second one.
+      const first = !state.rotationDue
+      const saved = first ? [...(this.keyrings.keys.get(companyId) ?? [])][0] : undefined
+      const r = rotation(state, this.keyrings, this.host.me, saved && orgKey(saved[1]))
+      // Saved before anything names the new key, so it can't be lost.
+      if (merge(this.keyrings, companyId, r.history) || this.keyringStale) await this.saveKeyring(cipher)
       this.setKeys()
+      // Someone else may have given the organization its key while the signer was busy.
+      const now = this.host.companies()?.get(companyId)
+      if (first && (!now || !this.unencrypted(now))) return
       const { address, content } = r.company
       await this.publish(template(address, content as never, this.host.nextTimestampIn(companyId), r.key))
       // An envelope that fails here is sent again by the next pass's duties.
@@ -336,6 +441,7 @@ export class Keychain {
     this.check()
     this.opened.add(event.id)
     await this.sendOrRefuse(event)
+    this.keyringStale = false
   }
 
   private async publish(unsigned: EventTemplate): Promise<void> {
@@ -357,4 +463,10 @@ export class Keychain {
   private check(): void {
     if (this.stopped) throw new Stopped()
   }
+}
+
+// Whether a saved copy of the keyring is missing any key held now.
+function lacks(copy: Keyrings, held: Keyrings): boolean {
+  for (const [companyId, ring] of held.keys) for (const kid of ring.keys()) if (!copy.keys.get(companyId)?.has(kid)) return true
+  return false
 }

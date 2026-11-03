@@ -27,6 +27,9 @@ export const emptyKeyrings = (): Keyrings => ({ keys: new Map(), current: new Ma
 export const envelopeD = (companyId: string, member: string): string => `canban:key:${companyId}:${member}`
 export const keyringD = (pubkey: string): string => `canban:keyring:${pubkey}`
 
+// The key ids an envelope carries, from its tags.
+export const envelopeKids = (event: NostrEvent): string[] => event.tags.filter((t) => (t[0] === 'k' || t[0] === 'h') && t[1]).map((t) => t[1])
+
 export function newOrgKey(): OrgKey {
   return orgKey(crypto.getRandomValues(new Uint8Array(32)))
 }
@@ -93,7 +96,9 @@ export async function envelope(cipher: Cipher, companyId: string, member: string
     kind: KIND,
     created_at: createdAt,
     // The p tag lets the member's subscription find it.
-    tags: [['d', envelopeD(companyId, member)], ['t', APP_TAG], ['c', companyId], ['p', member], ['k', kid]],
+    // h names every other key it carries, so the writer (and the relay's purge) can tell whether it
+    // hands out the whole history.
+    tags: [['d', envelopeD(companyId, member)], ['t', APP_TAG], ['c', companyId], ['p', member], ['k', kid], ...[...history.keys()].filter((h) => h !== kid).map((h) => ['h', h])],
     content: await cipher.encrypt(member, JSON.stringify(encode(history))),
   }
 }
@@ -185,9 +190,9 @@ export function recipients(state: CompanyState): string[] {
 // the whole history for everyone who remains. Run it on fully loaded state, so every removal is
 // counted. The company write goes out encrypted with `key` (created_at above every member event
 // seen), then the envelopes.
-export function rotation(state: CompanyState, keyrings: Keyrings, me: string): { key: OrgKey; history: Keyring; company: Write; recipients: string[] } {
+// `key` is a first key already saved to the admin's keyring, used instead of a new one.
+export function rotation(state: CompanyState, keyrings: Keyrings, me: string, key = newOrgKey()): { key: OrgKey; history: Keyring; company: Write; recipients: string[] } {
   if (state.locked || !isAdmin(state, me)) throw new Error(NOT_YET)
-  const key = newOrgKey()
   const history: Keyring = new Map(keyrings.keys.get(state.company.id) ?? [])
   history.set(key.kid, key.key)
   const people = recipients(state)
