@@ -9,7 +9,7 @@ const list: SubscriptionList = { orgs: { [org]: { paidUntil: '2026-12-01' } } }
 
 describe('entitlement', () => {
   it('treats operator-owned organizations as free', () => {
-    expect(entitlement(undefined, `${OPERATOR}.abc`)).toBe('free')
+    expect(entitlement(undefined, `${OPERATOR}.abc`)).toBe('privileged')
   })
 
   it('is paid through paidUntil, then grace for 7 days, then unpaid', () => {
@@ -21,6 +21,15 @@ describe('entitlement', () => {
 
   it('adds days across month ends', () => {
     expect(addDays('2026-12-28', 7)).toBe('2027-01-04')
+  })
+
+  it('expires complimentary access without inventing a payment or adding payment grace', () => {
+    const comp: SubscriptionList = { orgs: { [org]: { paidUntil: '2026-12-15', complimentaryUntil: '2026-12-15' } } }
+    expect(entitlement(comp, org, '2026-12-15')).toBe('privileged')
+    expect(entitlement(comp, org, '2026-12-16')).toBe('unpaid')
+    comp.orgs[org].billingPaidUntil = '2026-12-20'
+    expect(entitlement(comp, org, '2026-12-16')).toBe('paid')
+    expect(entitlement(comp, org, '2026-12-27')).toBe('grace')
   })
 
   it('only trusts the list signed by the billing key', () => {

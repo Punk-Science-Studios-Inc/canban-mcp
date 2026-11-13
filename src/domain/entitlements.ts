@@ -9,19 +9,23 @@ export const GRACE_DAYS = 7
 export const FREE_PROJECTS = 1
 export const FREE_PEOPLE = 3
 
-// Content of the kind 30078 event with d = canban/subscriptions: each paying organization and the
-// last day (YYYY-MM-DD, UTC) its payment covers.
+// Content of the kind 30078 event with d = canban/subscriptions. Dates are inclusive UTC days.
+// paidUntil is the effective date for legacy relay compatibility; grants separately identify
+// complimentary access and retain the actual paid period in billingPaidUntil.
 export interface SubscriptionList {
-  orgs: Record<string, { paidUntil: string }>
+  orgs: Record<string, { paidUntil: string; complimentaryUntil?: string; billingPaidUntil?: string }>
 }
 
-export type Entitlement = 'free' | 'paid' | 'grace' | 'unpaid'
+export type Entitlement = 'privileged' | 'paid' | 'grace' | 'unpaid'
 
-// Operator-owned organizations are free. Others are paid through paidUntil, then have a grace
-// period, then fall back to the free tier (read-only beyond its limits).
+// Operator-owned and complimentary organizations are privileged: never charged, no limits. Others
+// are paid through paidUntil, then have a grace period, then fall back to the free tier (read-only
+// beyond its limits).
 export function entitlement(list: SubscriptionList | undefined, companyId: string, today = new Date().toISOString().slice(0, 10)): Entitlement {
-  if (ownerOf(companyId) === OPERATOR) return 'free'
-  const paidUntil = list?.orgs[companyId]?.paidUntil
+  if (ownerOf(companyId) === OPERATOR) return 'privileged'
+  const entry = list?.orgs[companyId]
+  if (entry?.complimentaryUntil && today <= entry.complimentaryUntil) return 'privileged'
+  const paidUntil = entry?.complimentaryUntil ? entry.billingPaidUntil : entry?.paidUntil
   if (!paidUntil) return 'unpaid'
   if (today <= paidUntil) return 'paid'
   return today <= addDays(paidUntil, GRACE_DAYS) ? 'grace' : 'unpaid'
