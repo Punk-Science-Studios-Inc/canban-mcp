@@ -45128,8 +45128,10 @@ var GRACE_DAYS = 7;
 var FREE_PROJECTS = 1;
 var FREE_PEOPLE = 3;
 function entitlement(list, companyId, today = (/* @__PURE__ */ new Date()).toISOString().slice(0, 10)) {
-  if (ownerOf(companyId) === OPERATOR) return "free";
-  const paidUntil = list?.orgs[companyId]?.paidUntil;
+  if (ownerOf(companyId) === OPERATOR) return "privileged";
+  const entry = list?.orgs[companyId];
+  if (entry?.complimentaryUntil && today <= entry.complimentaryUntil) return "privileged";
+  const paidUntil = entry?.complimentaryUntil ? entry.billingPaidUntil : entry?.paidUntil;
   if (!paidUntil) return "unpaid";
   if (today <= paidUntil) return "paid";
   return today <= addDays(paidUntil, GRACE_DAYS) ? "grace" : "unpaid";
